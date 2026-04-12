@@ -1,6 +1,6 @@
 fastapi==0.104.1
 uvicorn==0.24.0
-sqlite3
+
 python-multipart==0.0.6
 groq==0.4.2
 opencv-python==4.0.1.78
