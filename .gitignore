@@ -3,7 +3,6 @@ __pycache__/
 *.pyc
 .env
 venv/
-temp/
 database/*.db
 models_cache/
 
