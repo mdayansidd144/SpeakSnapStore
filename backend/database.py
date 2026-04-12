@@ -1,6 +1,4 @@
 # import csv
-# import sqlite3
-# from contextlib import contextmanager
 # import os
 # import re
 # import json
@@ -8,9 +6,13 @@
 # from typing import List, Dict, Any, Optional
 # import time
 # import random
+# import psycopg2
+# from psycopg2.extras import RealDictCursor
+# from contextlib import contextmanager
 
-# DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'database', 'inventory.db')
-# HISTORY_DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'database', 'history.db')
+# # Database URLs - will be set from environment variables
+# DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://postgres:postgres@localhost:5432/inventory_db')
+# HISTORY_DATABASE_URL = os.getenv('HISTORY_DATABASE_URL', 'postgresql://postgres:postgres@localhost:5432/history_db')
 
 # # ==================== UTILITY FUNCTIONS ====================
 
@@ -72,8 +74,23 @@
 
 # @contextmanager
 # def get_db():
-#     conn = sqlite3.connect(DB_PATH)
-#     conn.row_factory = sqlite3.Row
+#     """Get PostgreSQL database connection"""
+#     conn = psycopg2.connect(DATABASE_URL)
+#     conn.autocommit = False
+#     try:
+#         yield conn
+#         conn.commit()
+#     except Exception as e:
+#         conn.rollback()
+#         raise e
+#     finally:
+#         conn.close()
+
+# @contextmanager
+# def get_history_db():
+#     """Get history database connection"""
+#     conn = psycopg2.connect(HISTORY_DATABASE_URL)
+#     conn.autocommit = False
 #     try:
 #         yield conn
 #         conn.commit()
@@ -85,12 +102,17 @@
 
 # def init_db():
 #     """Initialize database with fresh schema"""
-#     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    
-#     with get_db() as conn:
-#         conn.execute("DROP TABLE IF EXISTS items")
+#     # Ensure database exists (create if not)
+#     try:
+#         conn = psycopg2.connect(DATABASE_URL)
+#         conn.autocommit = True
+#         cur = conn.cursor()
         
-#         conn.execute('''
+#         # Drop existing table if exists
+#         cur.execute("DROP TABLE IF EXISTS items")
+        
+#         # Create items table
+#         cur.execute('''
 #             CREATE TABLE items (
 #                 id TEXT PRIMARY KEY,
 #                 name TEXT NOT NULL UNIQUE,
@@ -103,7 +125,8 @@
 #             )
 #         ''')
         
-#         conn.execute('CREATE INDEX IF NOT EXISTS idx_name ON items(name)')
+#         # Create index
+#         cur.execute("CREATE INDEX IF NOT EXISTS idx_name ON items(name)")
         
 #         # Insert sample items with prices
 #         sample_items = [
@@ -113,53 +136,81 @@
 #             (generate_unique_id(), 'banana', 5, 'fruits', 'piece', 0.30),
 #             (generate_unique_id(), 'orange', 8, 'fruits', 'piece', 0.40),
 #         ]
-#         conn.executemany('''
-#             INSERT INTO items (id, name, quantity, category, unit, price)
-#             VALUES (?, ?, ?, ?, ?, ?)
-#         ''', sample_items)
         
-#         print("[DB] Database initialized with sample data")
+#         for item in sample_items:
+#             cur.execute('''
+#                 INSERT INTO items (id, name, quantity, category, unit, price)
+#                 VALUES (%s, %s, %s, %s, %s, %s)
+#             ''', item)
+        
+#         conn.commit()
+#         cur.close()
+#         conn.close()
+        
+#         print("[DB] PostgreSQL database initialized with sample data")
+#     except Exception as e:
+#         print(f"[DB] Error initializing database: {e}")
+#         raise
 
 # def init_history_db():
-#     os.makedirs(os.path.dirname(HISTORY_DB_PATH), exist_ok=True)
-    
-#     conn = sqlite3.connect(HISTORY_DB_PATH)
-#     conn.execute('''
-#         CREATE TABLE IF NOT EXISTS transactions (
-#             id INTEGER PRIMARY KEY AUTOINCREMENT,
-#             transaction_id TEXT UNIQUE,
-#             action TEXT NOT NULL,
-#             item_name TEXT NOT NULL,
-#             quantity INTEGER DEFAULT 0,
-#             previous_quantity INTEGER DEFAULT 0,
-#             new_quantity INTEGER DEFAULT 0,
-#             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-#         )
-#     ''')
-#     conn.execute('CREATE INDEX IF NOT EXISTS idx_item_name ON transactions(item_name)')
-#     conn.commit()
-#     conn.close()
+#     """Initialize transaction history database"""
+#     try:
+#         conn = psycopg2.connect(HISTORY_DATABASE_URL)
+#         conn.autocommit = True
+#         cur = conn.cursor()
+        
+#         cur.execute('''
+#             CREATE TABLE IF NOT EXISTS transactions (
+#                 id SERIAL PRIMARY KEY,
+#                 transaction_id TEXT UNIQUE,
+#                 action TEXT NOT NULL,
+#                 item_name TEXT NOT NULL,
+#                 quantity INTEGER DEFAULT 0,
+#                 previous_quantity INTEGER DEFAULT 0,
+#                 new_quantity INTEGER DEFAULT 0,
+#                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+#             )
+#         ''')
+        
+#         cur.execute("CREATE INDEX IF NOT EXISTS idx_item_name ON transactions(item_name)")
+#         cur.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON transactions(timestamp)")
+        
+#         conn.commit()
+#         cur.close()
+#         conn.close()
+#     except Exception as e:
+#         print(f"[DB] Error initializing history database: {e}")
 
 # # ==================== CORE OPERATIONS (REAL-TIME) ====================
 
 # def get_all_items() -> List[Dict[str, Any]]:
 #     """Get all inventory items with calculated total value"""
 #     with get_db() as conn:
-#         items = []
-#         for row in conn.execute("SELECT * FROM items ORDER BY name"):
-#             item = dict(row)
-#             item['total_value'] = item['quantity'] * item.get('price', 0)
-#             items.append(item)
-#         return items
+#         cur = conn.cursor(cursor_factory=RealDictCursor)
+#         cur.execute("SELECT * FROM items ORDER BY name")
+#         items = cur.fetchall()
+#         cur.close()
+        
+#         # Convert to regular dict and add total_value
+#         result = []
+#         for item in items:
+#             item_dict = dict(item)
+#             item_dict['total_value'] = item_dict['quantity'] * item_dict.get('price', 0)
+#             result.append(item_dict)
+#         return result
 
 # def get_item_by_name(name: str) -> Optional[Dict[str, Any]]:
 #     name = standardize_name(name)
 #     with get_db() as conn:
-#         result = conn.execute("SELECT * FROM items WHERE name = ?", (name,)).fetchone()
+#         cur = conn.cursor(cursor_factory=RealDictCursor)
+#         cur.execute("SELECT * FROM items WHERE name = %s", (name,))
+#         result = cur.fetchone()
+#         cur.close()
+        
 #         if result:
-#             item = dict(result)
-#             item['total_value'] = item['quantity'] * item.get('price', 0)
-#             return item
+#             item_dict = dict(result)
+#             item_dict['total_value'] = item_dict['quantity'] * item_dict.get('price', 0)
+#             return item_dict
 #         return None
 
 # def add_item(name: str, quantity: int, category: str = 'general', unit: str = 'piece', price: float = None) -> bool:
@@ -177,25 +228,30 @@
 #         price = get_random_price(name)
     
 #     with get_db() as conn:
-#         existing = conn.execute("SELECT id, quantity, price FROM items WHERE name = ?", (name,)).fetchone()
+#         cur = conn.cursor()
+        
+#         # Check if item exists
+#         cur.execute("SELECT id, quantity, price FROM items WHERE name = %s", (name,))
+#         existing = cur.fetchone()
         
 #         if existing:
-#             old_qty = existing['quantity']
+#             old_qty = existing[1]
 #             new_qty = old_qty + quantity
-#             conn.execute('''
+#             cur.execute('''
 #                 UPDATE items 
-#                 SET quantity = ?, updated_at = CURRENT_TIMESTAMP 
-#                 WHERE name = ?
+#                 SET quantity = %s, updated_at = CURRENT_TIMESTAMP 
+#                 WHERE name = %s
 #             ''', (new_qty, name))
 #             log_transaction('add', name, quantity, old_qty, new_qty)
 #         else:
 #             item_id = generate_unique_id()
-#             conn.execute('''
+#             cur.execute('''
 #                 INSERT INTO items (id, name, quantity, category, unit, price, created_at, updated_at)
-#                 VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+#                 VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 #             ''', (item_id, name, quantity, category, unit, price))
 #             log_transaction('add', name, quantity, 0, quantity)
         
+#         cur.close()
 #         return True
 
 # def remove_item(name: str, quantity: int) -> bool:
@@ -209,63 +265,71 @@
 #         return False
     
 #     with get_db() as conn:
-#         existing = conn.execute("SELECT id, name, quantity FROM items WHERE name = ?", (name,)).fetchone()
+#         cur = conn.cursor()
+        
+#         cur.execute("SELECT id, name, quantity FROM items WHERE name = %s", (name,))
+#         existing = cur.fetchone()
         
 #         if not existing:
+#             cur.close()
 #             return False
         
-#         current_qty = existing['quantity']
+#         current_qty = existing[2]
         
 #         if quantity > current_qty:
+#             cur.close()
 #             return False
         
 #         new_qty = current_qty - quantity
         
 #         if new_qty <= 0:
-#             conn.execute("DELETE FROM items WHERE name = ?", (name,))
+#             cur.execute("DELETE FROM items WHERE name = %s", (name,))
 #             log_transaction('delete', name, quantity, current_qty, 0)
 #         else:
-#             conn.execute('''
+#             cur.execute('''
 #                 UPDATE items 
-#                 SET quantity = ?, updated_at = CURRENT_TIMESTAMP 
-#                 WHERE name = ?
+#                 SET quantity = %s, updated_at = CURRENT_TIMESTAMP 
+#                 WHERE name = %s
 #             ''', (new_qty, name))
 #             log_transaction('remove', name, quantity, current_qty, new_qty)
         
+#         cur.close()
 #         return True
 
 # def update_item_price(name: str, price: float) -> bool:
 #     """Update item price - REAL-TIME"""
 #     name = standardize_name(name)
 #     with get_db() as conn:
-#         conn.execute("UPDATE items SET price = ?, updated_at = CURRENT_TIMESTAMP WHERE name = ?", (price, name))
+#         cur = conn.cursor()
+#         cur.execute("UPDATE items SET price = %s, updated_at = CURRENT_TIMESTAMP WHERE name = %s", (price, name))
+#         cur.close()
 #         return True
 
 # # ==================== TRANSACTION HISTORY ====================
 
 # def log_transaction(action: str, item_name: str, quantity: int, prev_qty: int = 0, new_qty: int = 0):
 #     try:
-#         conn = sqlite3.connect(HISTORY_DB_PATH)
-#         transaction_id = f"txn_{int(time.time() * 1000000)}_{random.randint(1000, 9999)}"
-#         conn.execute('''
-#             INSERT INTO transactions (transaction_id, action, item_name, quantity, previous_quantity, new_quantity, timestamp)
-#             VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-#         ''', (transaction_id, action, item_name, quantity, prev_qty, new_qty))
-#         conn.commit()
-#         conn.close()
+#         with get_history_db() as conn:
+#             cur = conn.cursor()
+#             transaction_id = f"txn_{int(time.time() * 1000000)}_{random.randint(1000, 9999)}"
+#             cur.execute('''
+#                 INSERT INTO transactions (transaction_id, action, item_name, quantity, previous_quantity, new_quantity, timestamp)
+#                 VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+#             ''', (transaction_id, action, item_name, quantity, prev_qty, new_qty))
+#             cur.close()
 #     except Exception as e:
 #         print(f"Error logging transaction: {e}")
 
 # def get_transaction_history(limit: int = 50) -> List[Dict[str, Any]]:
 #     try:
-#         conn = sqlite3.connect(HISTORY_DB_PATH)
-#         conn.row_factory = sqlite3.Row
-#         history = [dict(row) for row in conn.execute(
-#             "SELECT * FROM transactions ORDER BY timestamp DESC LIMIT ?", (limit,)
-#         )]
-#         conn.close()
-#         return history
+#         with get_history_db() as conn:
+#             cur = conn.cursor(cursor_factory=RealDictCursor)
+#             cur.execute("SELECT * FROM transactions ORDER BY timestamp DESC LIMIT %s", (limit,))
+#             history = cur.fetchall()
+#             cur.close()
+#             return [dict(row) for row in history]
 #     except Exception as e:
+#         print(f"Error getting transactions: {e}")
 #         return []
 
 # # ==================== STATISTICS (REAL-TIME) ====================
@@ -284,16 +348,25 @@
 
 # def get_all_categories() -> List[str]:
 #     with get_db() as conn:
-#         return [row[0] for row in conn.execute("SELECT DISTINCT category FROM items ORDER BY category")]
+#         cur = conn.cursor()
+#         cur.execute("SELECT DISTINCT category FROM items ORDER BY category")
+#         categories = [row[0] for row in cur.fetchall()]
+#         cur.close()
+#         return categories
 
 # def search_items(query: str) -> List[Dict[str, Any]]:
 #     with get_db() as conn:
-#         items = []
-#         for row in conn.execute("SELECT * FROM items WHERE name LIKE ? ORDER BY name", (f'%{query}%',)):
-#             item = dict(row)
-#             item['total_value'] = item['quantity'] * item.get('price', 0)
-#             items.append(item)
-#         return items
+#         cur = conn.cursor(cursor_factory=RealDictCursor)
+#         cur.execute("SELECT * FROM items WHERE name LIKE %s ORDER BY name", (f'%{query}%',))
+#         items = cur.fetchall()
+#         cur.close()
+        
+#         result = []
+#         for item in items:
+#             item_dict = dict(item)
+#             item_dict['total_value'] = item_dict['quantity'] * item_dict.get('price', 0)
+#             result.append(item_dict)
+#         return result
 
 # # ==================== EXPORT FUNCTIONS ====================
 
@@ -309,7 +382,9 @@
 #     }
     
 #     if not filepath:
-#         filepath = os.path.join(os.path.dirname(DB_PATH), f'inventory_export_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json')
+#         filepath = os.path.join(os.path.dirname(__file__), '..', 'database', f'inventory_export_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json')
+    
+#     os.makedirs(os.path.dirname(filepath), exist_ok=True)
     
 #     with open(filepath, 'w', encoding='utf-8') as f:
 #         json.dump(data, f, indent=2, default=str, ensure_ascii=False)
@@ -319,7 +394,9 @@
 # def export_inventory_to_csv() -> str:
 #     """Export inventory to CSV"""
 #     items = get_all_items()
-#     filepath = os.path.join(os.path.dirname(DB_PATH), f'inventory_export_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv')
+#     filepath = os.path.join(os.path.dirname(__file__), '..', 'database', f'inventory_export_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv')
+    
+#     os.makedirs(os.path.dirname(filepath), exist_ok=True)
     
 #     with open(filepath, 'w', newline='', encoding='utf-8') as f:
 #         writer = csv.writer(f)
@@ -336,7 +413,9 @@
 # def export_inventory_to_txt() -> str:
 #     """Export inventory to TXT format"""
 #     items = get_all_items()
-#     filepath = os.path.join(os.path.dirname(DB_PATH), f'inventory_export_{datetime.now().strftime("%Y%m%d_%H%M%S")}.txt')
+#     filepath = os.path.join(os.path.dirname(__file__), '..', 'database', f'inventory_export_{datetime.now().strftime("%Y%m%d_%H%M%S")}.txt')
+    
+#     os.makedirs(os.path.dirname(filepath), exist_ok=True)
     
 #     with open(filepath, 'w', encoding='utf-8') as f:
 #         f.write("=" * 60 + "\n")
@@ -366,7 +445,7 @@
 # init_history_db()
 
 # print("=" * 50)
-# print("🗄️ REAL-TIME DATABASE ACTIVE")
+# print("🐘 POSTGRESQL REAL-TIME DATABASE ACTIVE")
 # print("=" * 50)
 # print("✅ Dynamic add/remove ready")
 # print("✅ Price/Value system active")
@@ -383,6 +462,7 @@ import random
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from contextlib import contextmanager
+from io import StringIO
 
 # Database URLs - will be set from environment variables
 DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://postgres:postgres@localhost:5432/inventory_db')
@@ -476,16 +556,13 @@ def get_history_db():
 
 def init_db():
     """Initialize database with fresh schema"""
-    # Ensure database exists (create if not)
     try:
         conn = psycopg2.connect(DATABASE_URL)
         conn.autocommit = True
         cur = conn.cursor()
         
-        # Drop existing table if exists
         cur.execute("DROP TABLE IF EXISTS items")
         
-        # Create items table
         cur.execute('''
             CREATE TABLE items (
                 id TEXT PRIMARY KEY,
@@ -499,10 +576,8 @@ def init_db():
             )
         ''')
         
-        # Create index
         cur.execute("CREATE INDEX IF NOT EXISTS idx_name ON items(name)")
         
-        # Insert sample items with prices
         sample_items = [
             (generate_unique_id(), 'biscuit', 10, 'snacks', 'packet', 10.0),
             (generate_unique_id(), 'namkeen', 8, 'snacks', 'packet', 15.0),
@@ -555,7 +630,7 @@ def init_history_db():
     except Exception as e:
         print(f"[DB] Error initializing history database: {e}")
 
-# ==================== CORE OPERATIONS (REAL-TIME) ====================
+# ==================== CORE OPERATIONS ====================
 
 def get_all_items() -> List[Dict[str, Any]]:
     """Get all inventory items with calculated total value"""
@@ -565,7 +640,6 @@ def get_all_items() -> List[Dict[str, Any]]:
         items = cur.fetchall()
         cur.close()
         
-        # Convert to regular dict and add total_value
         result = []
         for item in items:
             item_dict = dict(item)
@@ -597,14 +671,12 @@ def add_item(name: str, quantity: int, category: str = 'general', unit: str = 'p
     if quantity <= 0:
         return False
     
-    # Auto-assign price if not provided
     if price is None:
         price = get_random_price(name)
     
     with get_db() as conn:
         cur = conn.cursor()
         
-        # Check if item exists
         cur.execute("SELECT id, quantity, price FROM items WHERE name = %s", (name,))
         existing = cur.fetchone()
         
@@ -706,7 +778,7 @@ def get_transaction_history(limit: int = 50) -> List[Dict[str, Any]]:
         print(f"Error getting transactions: {e}")
         return []
 
-# ==================== STATISTICS (REAL-TIME) ====================
+# ==================== STATISTICS ====================
 
 def get_summary_stats() -> Dict[str, Any]:
     items = get_all_items()
@@ -742,10 +814,10 @@ def search_items(query: str) -> List[Dict[str, Any]]:
             result.append(item_dict)
         return result
 
-# ==================== EXPORT FUNCTIONS ====================
+# ==================== EXPORT FUNCTIONS (FIXED FOR RENDER) ====================
 
-def export_inventory_to_json(filepath: str = None) -> str:
-    """Export inventory to JSON"""
+def export_inventory_to_json() -> str:
+    """Export inventory to JSON string (not file)"""
     items = get_all_items()
     data = {
         'export_date': datetime.now().isoformat(),
@@ -754,65 +826,51 @@ def export_inventory_to_json(filepath: str = None) -> str:
         'total_value': sum(i['total_value'] for i in items),
         'inventory': items
     }
-    
-    if not filepath:
-        filepath = os.path.join(os.path.dirname(__file__), '..', 'database', f'inventory_export_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json')
-    
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
-    
-    with open(filepath, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=2, default=str, ensure_ascii=False)
-    
-    return filepath
+    return json.dumps(data, indent=2, default=str, ensure_ascii=False)
 
 def export_inventory_to_csv() -> str:
-    """Export inventory to CSV"""
+    """Export inventory to CSV string (not file)"""
     items = get_all_items()
-    filepath = os.path.join(os.path.dirname(__file__), '..', 'database', f'inventory_export_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv')
+    output = StringIO()
+    writer = csv.writer(output)
+    writer.writerow(['Name', 'Quantity', 'Unit', 'Category', 'Price (₹)', 'Total Value (₹)'])
     
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    for item in items:
+        writer.writerow([
+            item['name'], item['quantity'], item.get('unit', 'piece'),
+            item.get('category', 'general'), item.get('price', 0),
+            item['total_value']
+        ])
     
-    with open(filepath, 'w', newline='', encoding='utf-8') as f:
-        writer = csv.writer(f)
-        writer.writerow(['Name', 'Quantity', 'Unit', 'Category', 'Price (₹)', 'Total Value (₹)'])
-        for item in items:
-            writer.writerow([
-                item['name'], item['quantity'], item.get('unit', 'piece'),
-                item.get('category', 'general'), item.get('price', 0),
-                item['total_value']
-            ])
-    
-    return filepath
+    return output.getvalue()
 
 def export_inventory_to_txt() -> str:
-    """Export inventory to TXT format"""
+    """Export inventory to TXT string (not file)"""
     items = get_all_items()
-    filepath = os.path.join(os.path.dirname(__file__), '..', 'database', f'inventory_export_{datetime.now().strftime("%Y%m%d_%H%M%S")}.txt')
+    output = []
+    output.append("=" * 60)
+    output.append("SPEAK SNAP STORE - INVENTORY REPORT")
+    output.append(f"Export Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    output.append("=" * 60)
+    output.append("")
     
-    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    for item in items:
+        output.append(f"📦 {item['name'].upper()}")
+        output.append(f"   Quantity: {item['quantity']} {item.get('unit', 'piece')}(s)")
+        output.append(f"   Price: ₹{item.get('price', 0):.2f}")
+        output.append(f"   Total Value: ₹{item['total_value']:.2f}")
+        output.append(f"   Category: {item.get('category', 'general')}")
+        output.append("-" * 40)
     
-    with open(filepath, 'w', encoding='utf-8') as f:
-        f.write("=" * 60 + "\n")
-        f.write("SPEAK SNAP STORE - INVENTORY REPORT\n")
-        f.write(f"Export Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-        f.write("=" * 60 + "\n\n")
-        
-        for item in items:
-            f.write(f"📦 {item['name'].upper()}\n")
-            f.write(f"   Quantity: {item['quantity']} {item.get('unit', 'piece')}(s)\n")
-            f.write(f"   Price: ₹{item.get('price', 0):.2f} per {item.get('unit', 'piece')}\n")
-            f.write(f"   Total Value: ₹{item['total_value']:.2f}\n")
-            f.write(f"   Category: {item.get('category', 'general')}\n")
-            f.write("-" * 40 + "\n")
-        
-        f.write("\n" + "=" * 60 + "\n")
-        f.write(f"SUMMARY\n")
-        f.write(f"Total Items: {len(items)}\n")
-        f.write(f"Total Quantity: {sum(i['quantity'] for i in items)}\n")
-        f.write(f"Total Inventory Value: ₹{sum(i['total_value'] for i in items):.2f}\n")
-        f.write("=" * 60 + "\n")
+    output.append("")
+    output.append("=" * 60)
+    output.append("SUMMARY")
+    output.append(f"Total Items: {len(items)}")
+    output.append(f"Total Quantity: {sum(i['quantity'] for i in items)}")
+    output.append(f"Total Inventory Value: ₹{sum(i['total_value'] for i in items):.2f}")
+    output.append("=" * 60)
     
-    return filepath
+    return '\n'.join(output)
 
 # ==================== INITIALIZE ====================
 init_db()
