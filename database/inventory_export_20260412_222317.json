@@ -1,0 +1,74 @@
+{
+  "export_date": "2026-04-12T22:23:17.208186",
+  "total_items": 6,
+  "total_quantity": 97,
+  "total_value": 430.7,
+  "inventory": [
+    {
+      "id": "item_1776011560975978_4036",
+      "name": "apple",
+      "quantity": 12,
+      "category": "fruits",
+      "unit": "piece",
+      "price": 0.5,
+      "created_at": "2026-04-12 16:32:40",
+      "updated_at": "2026-04-12 16:32:40",
+      "total_value": 6.0
+    },
+    {
+      "id": "item_1776011560975978_5034",
+      "name": "banana",
+      "quantity": 5,
+      "category": "fruits",
+      "unit": "piece",
+      "price": 0.3,
+      "created_at": "2026-04-12 16:32:40",
+      "updated_at": "2026-04-12 16:32:40",
+      "total_value": 1.5
+    },
+    {
+      "id": "item_1776011560975978_9488",
+      "name": "biscuit",
+      "quantity": 30,
+      "category": "snacks",
+      "unit": "packet",
+      "price": 10.0,
+      "created_at": "2026-04-12 16:32:40",
+      "updated_at": "2026-04-12 16:46:21",
+      "total_value": 300.0
+    },
+    {
+      "id": "item_1776012257895048_6295",
+      "name": "mango",
+      "quantity": 34,
+      "category": "general",
+      "unit": "piece",
+      "price": 0.0,
+      "created_at": "2026-04-12 16:44:17",
+      "updated_at": "2026-04-12 16:44:30",
+      "total_value": 0.0
+    },
+    {
+      "id": "item_1776011560975978_4649",
+      "name": "namkeen",
+      "quantity": 8,
+      "category": "snacks",
+      "unit": "packet",
+      "price": 15.0,
+      "created_at": "2026-04-12 16:32:40",
+      "updated_at": "2026-04-12 16:32:40",
+      "total_value": 120.0
+    },
+    {
+      "id": "item_1776011560975978_4644",
+      "name": "orange",
+      "quantity": 8,
+      "category": "fruits",
+      "unit": "piece",
+      "price": 0.4,
+      "created_at": "2026-04-12 16:32:40",
+      "updated_at": "2026-04-12 16:32:40",
+      "total_value": 3.2
+    }
+  ]
+}

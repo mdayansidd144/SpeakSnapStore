@@ -1,0 +1,56 @@
+.voice-assistant {
+  text-align: center;
+}
+
+.mic-button {
+  width: 150px;
+  height: 150px;
+  border-radius: 50%;
+  font-size: 1.5rem;
+  background: #4CAF50;
+  color: rgb(14, 1, 1);
+  border: none;
+  cursor: pointer;
+  margin-bottom: 20px;
+  transition: transform 0.2s;
+}
+
+.mic-button:hover {
+  transform: scale(1.05);
+}
+
+.voice-assistant input {
+  width: 70%;
+  padding: 12px;
+  font-size: 1rem;
+  border: 2px solid #ddd;
+  border-radius: 10px;
+  margin-right: 10px;
+}
+
+.preview-card {
+  margin-top: 20px;
+  padding: 20px;
+  background: #fff3e0;
+  border-radius: 15px;
+}
+
+.confirm {
+  background: #4CAF50;
+  color: white;
+  padding: 10px 20px;
+  border: none;
+  border-radius: 8px;
+  margin: 5px;
+  cursor: pointer;
+}
+
+.cancel {
+  background: #f44336;
+  color: white;
+  padding: 10px 20px;
+  border: none;
+  border-radius: 8px;
+  margin: 5px;
+  cursor: pointer;
+}

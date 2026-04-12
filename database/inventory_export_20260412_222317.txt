@@ -1,0 +1,48 @@
+============================================================
+SPEAK SNAP STORE - INVENTORY REPORT
+Export Date: 2026-04-12 22:23:17
+============================================================
+
+📦 APPLE
+   Quantity: 12 piece(s)
+   Price: ₹0.50 per piece
+   Total Value: ₹6.00
+   Category: fruits
+----------------------------------------
+📦 BANANA
+   Quantity: 5 piece(s)
+   Price: ₹0.30 per piece
+   Total Value: ₹1.50
+   Category: fruits
+----------------------------------------
+📦 BISCUIT
+   Quantity: 30 packet(s)
+   Price: ₹10.00 per packet
+   Total Value: ₹300.00
+   Category: snacks
+----------------------------------------
+📦 MANGO
+   Quantity: 34 piece(s)
+   Price: ₹0.00 per piece
+   Total Value: ₹0.00
+   Category: general
+----------------------------------------
+📦 NAMKEEN
+   Quantity: 8 packet(s)
+   Price: ₹15.00 per packet
+   Total Value: ₹120.00
+   Category: snacks
+----------------------------------------
+📦 ORANGE
+   Quantity: 8 piece(s)
+   Price: ₹0.40 per piece
+   Total Value: ₹3.20
+   Category: fruits
+----------------------------------------
+
+============================================================
+SUMMARY
+Total Items: 6
+Total Quantity: 97
+Total Inventory Value: ₹430.70
+============================================================

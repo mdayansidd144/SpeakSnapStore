@@ -1,0 +1,20 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Backend",
+            "type": "python",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": ["main:app", "--reload", "--port", "8000"],
+            "cwd": "${workspaceFolder}/backend"
+        },
+        {
+            "name": "Frontend",
+            "type": "chrome",
+            "request": "launch",
+            "url": "http://localhost:5174",
+            "webRoot": "${workspaceFolder}/frontend"
+        }
+    ]
+}

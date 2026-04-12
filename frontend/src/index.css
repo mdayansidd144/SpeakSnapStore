@@ -1,0 +1,66 @@
+ * {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+ body {
+ background: linear-gradient(135deg, 
+  rgb(32, 178, 170) 0%,
+  rgb(64, 200, 192) 15%,     
+  rgb(96, 220, 210) 30%,    
+  rgb(128, 235, 228) 45%,    
+  rgb(160, 245, 240) 60%,    
+  rgb(200, 250, 248) 80%,   
+  rgb(240, 255, 254) 100%    
+);
+  min-height: 100vh;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
+
+button {
+  font-family: inherit;
+}
+
+/* Remove default button styles */
+button {
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+/* Smooth scrolling */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Focus styles for accessibility */
+:focus {
+  outline: 2px solid #667eea;
+  outline-offset: 2px;
+}
+
+/* Disable outline for mouse users */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Animations */
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}

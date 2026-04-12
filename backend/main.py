@@ -1,0 +1,29 @@
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from routes import voice, vision, parse, inventory
+import os
+
+app = FastAPI(title="Speak Snap Store", description="AI-Powered Inventory Management")
+
+# CORS for React frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173", "http://localhost:5174", "http://127.0.0.1:5173", "http://127.0.0.1:5174"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Register routers
+app.include_router(voice.router, prefix="/api/voice", tags=["Voice"])
+app.include_router(vision.router, prefix="/api/vision", tags=["Vision"])
+app.include_router(parse.router, prefix="/api/parse", tags=["Parse"])
+app.include_router(inventory.router, prefix="/api/inventory", tags=["Inventory"])
+
+@app.get("/")
+def root():
+    return {"message": "Speak Snap Store API", "status": "active", "version": "2.0"}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000, reload=True)
