@@ -1,5 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
-const API_BASE = 'http://localhost:8000'
+
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+
 export default function VoiceAssistant({ onFeedback, onSuccess }) {
   const [input, setInput] = useState('')
   const [preview, setPreview] = useState(null)
@@ -15,6 +17,22 @@ export default function VoiceAssistant({ onFeedback, onSuccess }) {
       }
     }
   }, [])
+
+  const parseMultipleItems = (text) => {
+    const items = []
+    const pattern = /(\d+)\s+([a-zA-Z\s]+?)(?=,|$|and|\.)/g
+    let match
+    const tempText = text.replace(/add/gi, '').replace(/stock/gi, '').trim()
+    
+    while ((match = pattern.exec(tempText)) !== null) {
+      const quantity = parseInt(match[1])
+      let itemName = match[2].trim().replace(/,/g, '').trim()
+      if (itemName && quantity > 0 && itemName.length > 1) {
+        items.push({ item: itemName, quantity, action: 'add' })
+      }
+    }
+    return items
+  }
 
   const startVoice = () => {
     if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
@@ -32,7 +50,7 @@ export default function VoiceAssistant({ onFeedback, onSuccess }) {
 
     recognition.onstart = () => {
       setIsListening(true)
-      onFeedback('🎤 Listening... Speak your command')
+      onFeedback('🎤 Listening...')
     }
 
     recognition.onresult = (event) => {
@@ -44,7 +62,7 @@ export default function VoiceAssistant({ onFeedback, onSuccess }) {
     }
 
     recognition.onerror = () => {
-      onFeedback('❌ Could not hear you. Try typing.')
+      onFeedback('❌ Could not hear you')
       setIsListening(false)
     }
 
@@ -59,7 +77,7 @@ export default function VoiceAssistant({ onFeedback, onSuccess }) {
     if (recognitionRef.current) {
       recognitionRef.current.abort()
       setIsListening(false)
-      onFeedback('🎤 Stopped listening')
+      onFeedback('🎤 Stopped')
     }
   }
 
@@ -70,9 +88,19 @@ export default function VoiceAssistant({ onFeedback, onSuccess }) {
     }
     
     setLoading(true)
-    onFeedback('🤔 Understanding your command...')
+    onFeedback('🤔 Processing...')
     setMultipleItems(null)
     setPreview(null)
+    
+    const hasMultiple = (text.match(/,/g) || []).length > 0 || (text.match(/and/g) || []).length > 0
+    const multipleItemsMatch = parseMultipleItems(text)
+    
+    if (hasMultiple && multipleItemsMatch.length > 1) {
+      setMultipleItems(multipleItemsMatch)
+      onFeedback(`✅ Found ${multipleItemsMatch.length} items!`)
+      setLoading(false)
+      return
+    }
     
     try {
       const response = await fetch(`${API_BASE}/api/parse/`, {
@@ -81,25 +109,12 @@ export default function VoiceAssistant({ onFeedback, onSuccess }) {
         body: JSON.stringify({ text: text.trim() })
       })
       
-      if (!response.ok) {
-        const error = await response.json()
-        throw new Error(error.detail || 'Parse failed')
-      }
+      if (!response.ok) throw new Error('Parse failed')
       
       const data = await response.json()
-      console.log('Parse response:', data)
       
-      // Check if this is a multiple items response
-      if (data.type === 'multiple' && data.items && data.items.length > 0) {
-        setMultipleItems(data.items)
-        onFeedback(`✅ Found ${data.items.length} items! Review below.`)
-        setLoading(false)
-        return
-      }
-      
-      // Single item - validate
       if (!data.item || data.item === 'item') {
-        onFeedback('❌ Could not identify the item. Try "add 5 apples"')
+        onFeedback('❌ Could not identify item')
         setLoading(false)
         return
       }
@@ -111,10 +126,9 @@ export default function VoiceAssistant({ onFeedback, onSuccess }) {
       }
       
       setPreview(data)
-      onFeedback(`✅ Ready to ${data.action}: ${data.quantity} × ${data.item}`)
+      onFeedback(`✅ ${data.quantity} × ${data.item}`)
     } catch (error) {
-      console.error('Parse error:', error)
-      onFeedback(`❌ ${error.message}`)
+      onFeedback('❌ Command not recognized')
     }
     setLoading(false)
   }
@@ -123,6 +137,8 @@ export default function VoiceAssistant({ onFeedback, onSuccess }) {
     if (!preview) return
     
     const endpoint = preview.action === 'add' ? '/api/inventory/add' : '/api/inventory/remove'
+    
+    onFeedback(`⏳ ${preview.action === 'add' ? 'Adding' : 'Removing'} ${preview.quantity} × ${preview.item}...`)
     
     try {
       const response = await fetch(`${API_BASE}${endpoint}`, {
@@ -134,7 +150,7 @@ export default function VoiceAssistant({ onFeedback, onSuccess }) {
         })
       })
       
-      if (!response.ok) throw new Error('Operation failed')
+      if (!response.ok) throw new Error('Failed')
       
       const data = await response.json()
       onFeedback(`🎉 ${data.message}`)
@@ -142,22 +158,33 @@ export default function VoiceAssistant({ onFeedback, onSuccess }) {
       setInput('')
       onSuccess()
     } catch (error) {
-      onFeedback(`❌ Failed to update inventory`)
+      onFeedback(`❌ Failed to update`)
     }
   }
 
   const confirmMultipleItems = async () => {
     if (!multipleItems) return
     
-    const successCount = multipleItems.filter(item => item.success).length
-    const failedItems = multipleItems.filter(item => !item.success).map(item => item.item)
+    onFeedback(`⏳ Adding ${multipleItems.length} items...`)
     
-    if (successCount === multipleItems.length) {
-      onFeedback(`🎉 Added all ${multipleItems.length} items to inventory!`)
-    } else {
-      onFeedback(`⚠️ Added ${successCount}/${multipleItems.length} items. Failed: ${failedItems.join(', ')}`)
+    let successCount = 0
+    for (const item of multipleItems) {
+      try {
+        const response = await fetch(`${API_BASE}/api/inventory/add`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            name: item.item.toLowerCase(), 
+            quantity: item.quantity 
+          })
+        })
+        if (response.ok) successCount++
+      } catch (error) {
+        console.error(`Failed to add ${item.item}:`, error)
+      }
     }
     
+    onFeedback(`✅ Added ${successCount}/${multipleItems.length} items!`)
     setMultipleItems(null)
     setInput('')
     onSuccess()
@@ -174,87 +201,46 @@ export default function VoiceAssistant({ onFeedback, onSuccess }) {
   }
 
   const exampleCommands = [
-    { text: 'add 5 apples', icon: '🍎', desc: 'Add 5 apples' },
-    { text: 'add 10 biscuits', icon: '🍪', desc: 'Add 10 biscuits' },
-    { text: 'remove 3 namkeen', icon: '🥨', desc: 'Remove 3 namkeen' },
-    { text: '10 toothpaste, 10 water bottles, 15 notebooks', icon: '📦', desc: 'Add multiple items' },
-    { text: 'add 5 apples and 3 bananas and 2 oranges', icon: '🍎🍌🍊', desc: 'Add multiple fruits' },
-    { text: '10 biscuits, 5 namkeen, 3 chips', icon: '🍪', desc: 'Add multiple snacks' },
-    { text: 'stock 20 pencils and 15 erasers', icon: '✏️', desc: 'Add stationery' }
+    { text: 'add 5 apples', icon: '🍎', color: '#4CAF50' },
+    { text: 'remove 2 oranges', icon: '🍊', color: '#FF9800' },
+    { text: 'add 10 biscuits', icon: '🍪', color: '#2196F3' },
+    { text: '10 biscuits, 10 books, 2 chocolates', icon: '📦', color: '#9C27B0' }
   ]
 
   return (
-    <div style={{ padding: '20px' }}>
+    <div className="voice-assistant" style={styles.container}>
       {/* Voice Button */}
-      <div style={{ textAlign: 'center', marginBottom: '24px' }}>
+      <div style={styles.micSection}>
         <button 
+          className={`mic-button ${isListening ? 'listening' : ''}`}
           onClick={isListening ? stopVoice : startVoice}
-          style={{
-            width: '120px',
-            height: '120px',
-            borderRadius: '50%',
-            background: isListening ? '#ff4444' : 'linear-gradient(135deg, #4CAF50 0%, #45a049 100%)',
-            border: 'none',
-            cursor: 'pointer',
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '8px',
-            margin: '0 auto',
-            transition: 'all 0.3s ease',
-            boxShadow: isListening ? '0 0 20px rgba(255,68,68,0.5)' : '0 4px 20px rgba(76,175,80,0.3)'
-          }}
+          style={styles.micButton(isListening)}
         >
-          <div style={{ fontSize: '40px' }}>{isListening ? '🔴' : '🎤'}</div>
-          <span style={{ fontSize: '12px', color: 'white', fontWeight: '500' }}>
+          <div style={styles.micIcon}>{isListening ? '🔴' : '🎤'}</div>
+          <span style={styles.micText}>
             {isListening ? 'Listening...' : 'Click to Speak'}
           </span>
         </button>
-        <p style={{ fontSize: '12px', color: '#666', marginTop: '8px' }}>
-          Try: "10 toothpaste, 10 water bottles, 15 notebooks"
+        <p style={styles.micHint}>
+          Try: <strong>"10 biscuits, 10 books, 2 chocolates"</strong>
         </p>
       </div>
 
       {/* Input Area */}
-      <div style={{ marginBottom: '20px' }}>
-        <div style={{
-          display: 'flex',
-          gap: '8px',
-          background: '#f5f5f7',
-          borderRadius: '16px',
-          padding: '4px',
-          border: '1px solid #e9ecef'
-        }}>
+      <div style={styles.inputSection}>
+        <div style={styles.inputWrapper}>
           <input
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder='Type: "10 toothpaste, 10 water bottles, 15 notebooks"'
-            style={{
-              flex: 1,
-              padding: '14px 16px',
-              fontSize: '14px',
-              border: 'none',
-              background: 'transparent',
-              outline: 'none',
-              fontFamily: 'inherit'
-            }}
+            placeholder='Type: "10 biscuits, 10 books, 2 chocolates"'
+            style={styles.input}
             onKeyPress={(e) => e.key === 'Enter' && parseCommand(input)}
           />
           <button 
             onClick={() => parseCommand(input)} 
             disabled={loading || !input.trim()}
-            style={{
-              padding: '12px 24px',
-              fontSize: '14px',
-              background: (loading || !input.trim()) ? '#ccc' : '#2196F3',
-              color: 'white',
-              border: 'none',
-              borderRadius: '12px',
-              cursor: (loading || !input.trim()) ? 'not-allowed' : 'pointer',
-              fontWeight: '600'
-            }}
+            style={styles.parseButton(loading || !input.trim())}
           >
             {loading ? '⟳' : 'Parse'}
           </button>
@@ -262,9 +248,9 @@ export default function VoiceAssistant({ onFeedback, onSuccess }) {
       </div>
 
       {/* Example Commands */}
-      <div style={{ marginBottom: '20px' }}>
-        <p style={{ fontSize: '12px', color: '#666', marginBottom: '8px' }}>💡 Try these commands:</p>
-        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+      <div style={styles.examplesSection}>
+        <p style={styles.examplesTitle}>💡 Try these commands:</p>
+        <div style={styles.examplesGrid}>
           {exampleCommands.map((cmd, i) => (
             <button
               key={i}
@@ -272,75 +258,286 @@ export default function VoiceAssistant({ onFeedback, onSuccess }) {
                 setInput(cmd.text)
                 parseCommand(cmd.text)
               }}
-              style={{
-                padding: '6px 12px',
-                fontSize: '11px',
-                background: '#f0f0f0',
-                border: '1px solid #ddd',
-                borderRadius: '20px',
-                cursor: 'pointer',
-                transition: 'all 0.2s',
-                whiteSpace: 'nowrap'
-              }}
-              title={cmd.desc}
+              style={styles.exampleButton(cmd.color)}
             >
-              <span style={{ marginRight: '4px' }}>{cmd.icon}</span>
-              {cmd.text.length > 35 ? cmd.text.substring(0, 35) + '...' : cmd.text}
+              <span style={{ marginRight: '6px' }}>{cmd.icon}</span>
+              <span>{cmd.text.length > 35 ? cmd.text.substring(0, 35) + '...' : cmd.text}</span>
             </button>
           ))}
         </div>
       </div>
 
-      {/* Single Item Preview */}
-      {preview && (
-        <div style={{
-          marginTop: '20px',
-          padding: '20px',
-          background: 'linear-gradient(135deg, #fff3e0 0%, #ffe0b2 100%)',
-          borderRadius: '16px'
-        }}>
-          <h3 style={{ margin: '0 0 10px 0' }}>📋 Single Item</h3>
-          <p style={{ fontSize: '24px', margin: '10px 0', fontWeight: 'bold' }}>
-            {preview.quantity} × {preview.item}
-          </p>
-          <div style={{ display: 'flex', gap: '10px', justifyContent: 'center', marginTop: '15px' }}>
-            <button onClick={confirmAction} style={{ background: '#4CAF50', color: 'white', padding: '10px 20px', border: 'none', borderRadius: '8px', cursor: 'pointer' }}>✅ Confirm</button>
-            <button onClick={cancelAction} style={{ background: '#f44336', color: 'white', padding: '10px 20px', border: 'none', borderRadius: '8px', cursor: 'pointer' }}>❌ Cancel</button>
+      {/* Multiple Items Preview */}
+      {multipleItems && (
+        <div style={styles.multiplePreview}>
+          <h3 style={styles.multipleTitle}>📦 Multiple Items Detected</h3>
+          <div style={styles.multipleList}>
+            {multipleItems.map((item, idx) => (
+              <div key={idx} style={styles.multipleItem}>
+                <span style={{ textTransform: 'capitalize', fontWeight: '500' }}>{item.item}</span>
+                <span style={styles.multipleItemBadge}>{item.quantity} units</span>
+              </div>
+            ))}
+          </div>
+          <div style={styles.previewActions}>
+            <button onClick={confirmMultipleItems} style={styles.confirmButton}>
+              ✅ Add All
+            </button>
+            <button onClick={cancelMultipleItems} style={styles.cancelButton}>
+              ❌ Cancel
+            </button>
           </div>
         </div>
       )}
 
-      {/* Multiple Items Preview */}
-      {multipleItems && (
-        <div style={{
-          marginTop: '20px',
-          padding: '20px',
-          background: 'linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%)',
-          borderRadius: '16px'
-        }}>
-          <h3 style={{ margin: '0 0 10px 0' }}>📦 Multiple Items</h3>
-          <div style={{ marginBottom: '15px' }}>
-            {multipleItems.map((item, idx) => (
-              <div key={idx} style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                padding: '8px 0',
-                borderBottom: '1px solid rgba(0,0,0,0.1)'
-              }}>
-                <span style={{ textTransform: 'capitalize' }}>{item.item}</span>
-                <span><strong>{item.quantity}</strong> units</span>
-                <span style={{ color: item.success ? '#4CAF50' : '#f44336' }}>
-                  {item.success ? '✓' : '✗'}
-                </span>
-              </div>
-            ))}
-          </div>
-          <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
-            <button onClick={confirmMultipleItems} style={{ background: '#4CAF50', color: 'white', padding: '10px 20px', border: 'none', borderRadius: '8px', cursor: 'pointer' }}>✅ Add All</button>
-            <button onClick={cancelMultipleItems} style={{ background: '#f44336', color: 'white', padding: '10px 20px', border: 'none', borderRadius: '8px', cursor: 'pointer' }}>❌ Cancel</button>
+      {/* Single Item Preview */}
+      {preview && (
+        <div style={styles.singlePreview}>
+          <h3 style={styles.singleTitle}>📋 Preview</h3>
+          <p style={styles.previewQuantity}>
+            {preview.quantity} × {preview.item}
+          </p>
+          <div style={styles.previewActions}>
+            <button onClick={confirmAction} style={styles.confirmButton}>
+              ✅ Confirm
+            </button>
+            <button onClick={cancelAction} style={styles.cancelButton}>
+              ❌ Cancel
+            </button>
           </div>
         </div>
       )}
+
+      <style>{`
+        @keyframes pulse {
+          0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(102, 126, 234, 0.4); }
+          70% { transform: scale(1.05); box-shadow: 0 0 0 15px rgba(102, 126, 234, 0); }
+          100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(102, 126, 234, 0); }
+        }
+        
+        @keyframes fadeIn {
+          from { opacity: 0; transform: translateY(-10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        
+        @keyframes slideIn {
+          from { opacity: 0; transform: translateX(-20px); }
+          to { opacity: 1; transform: translateX(0); }
+        }
+        
+        .mic-button {
+          transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        
+        .mic-button:hover {
+          transform: scale(1.02);
+        }
+        
+        .mic-button:active {
+          transform: scale(0.98);
+          transition: transform 0.05s;
+        }
+        
+        .voice-assistant {
+          animation: fadeIn 0.3s ease;
+        }
+      `}</style>
     </div>
   )
+}
+
+const styles = {
+  container: {
+    padding: '24px',
+    background: 'linear-gradient(135deg, #ffffff 0%, #f8f9ff 100%)',
+    borderRadius: '28px',
+    boxShadow: '0 8px 32px rgba(0, 0, 0, 0.06)',
+    border: '1px solid rgba(102, 126, 234, 0.15)',
+    animation: 'fadeIn 0.3s ease'
+  },
+  micSection: {
+    textAlign: 'center',
+    marginBottom: '28px'
+  },
+  micButton: (isListening) => ({
+    width: '140px',
+    height: '140px',
+    borderRadius: '50%',
+    background: isListening ? '#ff4444' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+    border: 'none',
+    cursor: 'pointer',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: '10px',
+    margin: '0 auto',
+    transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+    boxShadow: isListening ? '0 0 25px rgba(255,68,68,0.5)' : '0 8px 25px rgba(102,126,234,0.3)',
+    animation: isListening ? 'pulse 1.5s infinite' : 'none'
+  }),
+  micIcon: {
+    fontSize: '52px'
+  },
+  micText: {
+    fontSize: '13px',
+    color: 'white',
+    fontWeight: '600'
+  },
+  micHint: {
+    fontSize: '13px',
+    color: '#5a6e6c',
+    marginTop: '12px'
+  },
+  inputSection: {
+    marginBottom: '24px'
+  },
+  inputWrapper: {
+    display: 'flex',
+    gap: '10px',
+    background: 'white',
+    borderRadius: '60px',
+    padding: '6px',
+    border: '1px solid rgba(102, 126, 234, 0.2)',
+    transition: 'all 0.2s',
+    boxShadow: '0 2px 8px rgba(0,0,0,0.02)'
+  },
+  input: {
+    flex: 1,
+    padding: '14px 20px',
+    fontSize: '14px',
+    border: 'none',
+    background: 'transparent',
+    outline: 'none',
+    fontFamily: 'inherit'
+  },
+  parseButton: (disabled) => ({
+    padding: '12px 28px',
+    fontSize: '14px',
+    background: disabled ? '#ccc' : 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+    color: 'white',
+    border: 'none',
+    borderRadius: '50px',
+    cursor: disabled ? 'not-allowed' : 'pointer',
+    fontWeight: '600',
+    transition: 'all 0.2s'
+  }),
+  examplesSection: {
+    marginBottom: '24px',
+    padding: '16px',
+    background: 'linear-gradient(135deg, #f8f9ff 0%, #f0f2ff 100%)',
+    borderRadius: '20px',
+    border: '1px solid rgba(102, 126, 234, 0.1)'
+  },
+  examplesTitle: {
+    fontSize: '12px',
+    color: '#667eea',
+    marginBottom: '12px',
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: '0.5px'
+  },
+  examplesGrid: {
+    display: 'flex',
+    gap: '10px',
+    flexWrap: 'wrap'
+  },
+  exampleButton: (color) => ({
+    padding: '8px 16px',
+    fontSize: '12px',
+    background: 'white',
+    border: `1px solid ${color}20`,
+    borderRadius: '40px',
+    cursor: 'pointer',
+    transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    color: color,
+    fontWeight: '500'
+  }),
+  multiplePreview: {
+    marginTop: '20px',
+    padding: '20px',
+    background: 'linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%)',
+    borderRadius: '20px',
+    animation: 'slideIn 0.3s ease',
+    border: '1px solid #a5d6a7'
+  },
+  multipleTitle: {
+    margin: '0 0 12px 0',
+    color: '#2e7d32',
+    fontSize: '1rem',
+    fontWeight: '600'
+  },
+  multipleList: {
+    marginBottom: '16px',
+    maxHeight: '200px',
+    overflowY: 'auto'
+  },
+  multipleItem: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: '10px 0',
+    borderBottom: '1px solid rgba(0,0,0,0.08)'
+  },
+  multipleItemBadge: {
+    background: '#4CAF50',
+    color: 'white',
+    padding: '2px 12px',
+    borderRadius: '20px',
+    fontSize: '12px'
+  },
+  singlePreview: {
+    marginTop: '20px',
+    padding: '20px',
+    background: 'linear-gradient(135deg, #fff8e7 0%, #fff3e0 100%)',
+    borderRadius: '20px',
+    animation: 'slideIn 0.3s ease',
+    border: '1px solid #ffe0b2'
+  },
+  singleTitle: {
+    margin: '0 0 12px 0',
+    color: '#e65100',
+    fontSize: '1rem',
+    fontWeight: '600'
+  },
+  previewQuantity: {
+    fontSize: '28px',
+    margin: '10px 0',
+    fontWeight: 'bold',
+    textAlign: 'center',
+    color: '#667eea'
+  },
+  previewActions: {
+    display: 'flex',
+    gap: '12px',
+    justifyContent: 'center',
+    marginTop: '16px'
+  },
+  confirmButton: {
+    padding: '10px 24px',
+    fontSize: '14px',
+    fontWeight: '600',
+    background: 'linear-gradient(135deg, #4CAF50 0%, #2E7D32 100%)',
+    color: 'white',
+    border: 'none',
+    borderRadius: '40px',
+    cursor: 'pointer',
+    transition: 'all 0.2s',
+    boxShadow: '0 2px 8px rgba(76, 175, 80, 0.3)'
+  },
+  cancelButton: {
+    padding: '10px 24px',
+    fontSize: '14px',
+    fontWeight: '600',
+    background: 'linear-gradient(135deg, #f44336 0%, #d32f2f 100%)',
+    color: 'white',
+    border: 'none',
+    borderRadius: '40px',
+    cursor: 'pointer',
+    transition: 'all 0.2s',
+    boxShadow: '0 2px 8px rgba(244, 67, 54, 0.3)'
+  }
 }

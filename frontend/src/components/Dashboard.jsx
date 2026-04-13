@@ -1,5 +1,7 @@
+
 import { useState, useEffect, useCallback, useMemo } from 'react'
-const API_BASE = 'http://localhost:8000'
+const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+
 export default function Dashboard({ stats, inventory, onRefresh, onFeedback }) {
   const [transactions, setTransactions] = useState([])
   const [categories, setCategories] = useState([])
@@ -7,16 +9,15 @@ export default function Dashboard({ stats, inventory, onRefresh, onFeedback }) {
   const [searchTerm, setSearchTerm] = useState('')
   const [loading, setLoading] = useState(false)
   const [restockingItem, setRestockingItem] = useState(null)
-  const [exporting, setExporting] = useState(false)
+  const [lowStockItems, setLowStockItems] = useState([])
 
   const fetchTransactions = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/inventory/transactions?limit=10`)
-      if (!res.ok) throw new Error('Failed to fetch')
+      const res = await fetch(`${API_BASE}/api/inventory/transactions?limit=15`)
+      if (!res.ok) throw new Error('Failed')
       const data = await res.json()
       setTransactions(Array.isArray(data) ? data : [])
     } catch (error) {
-      console.error('Failed to fetch transactions:', error)
       setTransactions([])
     }
   }, [])
@@ -24,85 +25,30 @@ export default function Dashboard({ stats, inventory, onRefresh, onFeedback }) {
   const fetchCategories = useCallback(async () => {
     try {
       const res = await fetch(`${API_BASE}/api/inventory/categories`)
-      if (!res.ok) throw new Error('Failed to fetch')
+      if (!res.ok) throw new Error('Failed')
       const data = await res.json()
       setCategories(Array.isArray(data) ? data : [])
     } catch (error) {
-      console.error('Failed to fetch categories:', error)
       setCategories([])
+    }
+  }, [])
+
+  const fetchLowStock = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_BASE}/api/inventory/low-stock`)
+      if (!res.ok) throw new Error('Failed')
+      const data = await res.json()
+      setLowStockItems(Array.isArray(data) ? data : [])
+    } catch (error) {
+      setLowStockItems([])
     }
   }, [])
 
   useEffect(() => {
     fetchTransactions()
     fetchCategories()
-  }, [fetchTransactions, fetchCategories])
-
-  const exportToJSON = async () => {
-    setExporting(true)
-    onFeedback('📁 Exporting to JSON...')
-    try {
-      const res = await fetch(`${API_BASE}/api/inventory/export/json`)
-      const data = await res.json()
-      if (data.success) {
-        onFeedback(`✅ Exported to JSON`)
-      } else {
-        onFeedback('❌ JSON export failed')
-      }
-    } catch (error) {
-      onFeedback('❌ JSON export failed')
-    }
-    setExporting(false)
-  }
-
-  const exportToCSV = async () => {
-    setExporting(true)
-    onFeedback('📊 Exporting to CSV...')
-    try {
-      const res = await fetch(`${API_BASE}/api/inventory/export/csv`)
-      const data = await res.json()
-      if (data.success) {
-        onFeedback(`✅ Exported to CSV`)
-      } else {
-        onFeedback('❌ CSV export failed')
-      }
-    } catch (error) {
-      onFeedback('❌ CSV export failed')
-    }
-    setExporting(false)
-  }
-
-  const exportToTXT = async () => {
-    setExporting(true)
-    onFeedback('📝 Exporting to TXT...')
-    try {
-      const res = await fetch(`${API_BASE}/api/inventory/export/txt`)
-      const data = await res.json()
-      if (data.success) {
-        onFeedback(`✅ Exported to TXT`)
-      } else {
-        onFeedback('❌ TXT export failed')
-      }
-    } catch (error) {
-      onFeedback('❌ TXT export failed')
-    }
-    setExporting(false)
-  }
-
-  const exportAllFormats = async () => {
-    setExporting(true)
-    onFeedback('📦 Exporting all formats...')
-    try {
-      const res = await fetch(`${API_BASE}/api/inventory/export/all`)
-      const data = await res.json()
-      if (data.success) {
-        onFeedback(`✅ Exported all formats`)
-      }
-    } catch (error) {
-      onFeedback('❌ Export failed')
-    }
-    setExporting(false)
-  }
+    fetchLowStock()
+  }, [fetchTransactions, fetchCategories, fetchLowStock])
 
   const handleRestock = useCallback(async (itemName) => {
     const qty = prompt(`How many ${itemName} to add?`, "10")
@@ -128,13 +74,15 @@ export default function Dashboard({ stats, inventory, onRefresh, onFeedback }) {
       
       onFeedback(`✅ Restocked ${quantity} ${itemName}`)
       onRefresh()
+      fetchLowStock()
+      fetchTransactions()
     } catch (error) {
       onFeedback(`❌ Failed to restock`)
     } finally {
       setRestockingItem(null)
       setLoading(false)
     }
-  }, [onFeedback, onRefresh])
+  }, [onFeedback, onRefresh, fetchLowStock, fetchTransactions])
 
   const filteredInventory = useMemo(() => {
     if (!inventory || !Array.isArray(inventory)) return []
@@ -144,11 +92,6 @@ export default function Dashboard({ stats, inventory, onRefresh, onFeedback }) {
       return true
     })
   }, [inventory, selectedCategory, searchTerm])
-
-  const lowStockItems = useMemo(() => {
-    if (!inventory || !Array.isArray(inventory)) return []
-    return inventory.filter(item => item.quantity <= 5)
-  }, [inventory])
 
   const totalValue = useMemo(() => {
     if (!inventory || !Array.isArray(inventory)) return 0
@@ -164,7 +107,8 @@ export default function Dashboard({ stats, inventory, onRefresh, onFeedback }) {
   const formatTime = (timestamp) => {
     if (!timestamp) return ''
     try {
-      return new Date(timestamp).toLocaleTimeString()
+      const date = new Date(timestamp)
+      return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     } catch {
       return ''
     }
@@ -173,44 +117,52 @@ export default function Dashboard({ stats, inventory, onRefresh, onFeedback }) {
   const statsData = useMemo(() => ({
     total_items: stats?.total_items || inventory?.length || 0,
     total_quantity: stats?.total_quantity || inventory?.reduce((sum, item) => sum + (item.quantity || 0), 0) || 0,
-    total_value: stats?.total_value || totalValue
-  }), [stats, inventory, totalValue])
+    total_value: stats?.total_value || totalValue,
+    low_stock_items: stats?.low_stock_items || lowStockItems.length
+  }), [stats, inventory, totalValue, lowStockItems.length])
+
+  const needsRestock = lowStockItems.length > 0
 
   return (
-    <div className="dashboard">
+    <div className="dashboard fade-in">
+      {/* Stats Grid */}
       <div className="stats-grid">
-        <div className="stat-card">
+        <div className="stat-card stat-card-purple">
           <div className="stat-icon">📦</div>
           <div className="stat-value">{statsData.total_items}</div>
           <div className="stat-label">Total Items</div>
         </div>
-        <div className="stat-card">
+        <div className="stat-card stat-card-blue">
           <div className="stat-icon">🔢</div>
           <div className="stat-value">{statsData.total_quantity}</div>
           <div className="stat-label">Total Units</div>
         </div>
-        <div className="stat-card">
+        <div className="stat-card stat-card-orange">
           <div className="stat-icon">⚠️</div>
-          <div className="stat-value">{lowStockItems.length}</div>
+          <div className="stat-value">{statsData.low_stock_items}</div>
           <div className="stat-label">Low Stock</div>
         </div>
-        <div className="stat-card">
+        <div className="stat-card stat-card-green">
           <div className="stat-icon">💰</div>
           <div className="stat-value">₹{statsData.total_value.toFixed(2)}</div>
           <div className="stat-label">Total Value</div>
         </div>
       </div>
 
-      {lowStockItems.length > 0 && (
-        <div className="alert-card">
-          <h3>⚠️ Low Stock Alert</h3>
-          <div className="low-stock-list">
+      {/* Low Stock Restock Section */}
+      {needsRestock && (
+        <div className="restock-section">
+          <h3>📋 Items Needing Restock</h3>
+          <div className="restock-list">
             {lowStockItems.map(item => (
-              <div key={item.id} className="low-stock-item">
-                <span><strong>{item.name}</strong></span>
-                <span className="low-stock-qty">Only {item.quantity} left</span>
-                <button className="restock-btn" onClick={() => handleRestock(item.name)} disabled={restockingItem === item.name || loading}>
-                  {restockingItem === item.name ? '⏳...' : '➕ Restock'}
+              <div key={item.id} className="restock-item">
+                <span><strong>{item.name}</strong> - Only {item.quantity} left</span>
+                <button 
+                  className="restock-btn" 
+                  onClick={() => handleRestock(item.name)} 
+                  disabled={restockingItem === item.name || loading}
+                >
+                  {restockingItem === item.name ? '⏳...' : '➕ Restock Now'}
                 </button>
               </div>
             ))}
@@ -218,25 +170,25 @@ export default function Dashboard({ stats, inventory, onRefresh, onFeedback }) {
         </div>
       )}
 
+      {/* Filter Bar */}
       <div className="filter-bar">
-        <input type="text" placeholder="🔍 Search items..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="search-input" />
+        <input
+          type="text"
+          placeholder="🔍 Search items..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          className="search-input"
+        />
         <select value={selectedCategory} onChange={(e) => setSelectedCategory(e.target.value)} className="category-select">
           <option value="all">All Categories ({categories.length})</option>
           {categories.map(cat => <option key={cat} value={cat}>{cat}</option>)}
         </select>
-        
-        <div className="export-buttons">
-          <button onClick={exportToJSON} className="export-json" disabled={exporting}>📄 JSON</button>
-          <button onClick={exportToCSV} className="export-csv" disabled={exporting}>📊 CSV</button>
-          <button onClick={exportToTXT} className="export-txt" disabled={exporting}>📝 TXT</button>
-          <button onClick={exportAllFormats} className="export-all" disabled={exporting}>📦 All</button>
-        </div>
-        
         {(searchTerm || selectedCategory !== 'all') && (
-          <button onClick={clearFilters} className="clear-btn">✖ Clear Filters</button>
+          <button onClick={clearFilters} className="clear-btn">✖ Clear</button>
         )}
       </div>
 
+      {/* Filtered Items Preview */}
       <div className="filtered-preview">
         <h3>📊 Filtered Items {filteredInventory.length > 0 && `(${filteredInventory.length})`}</h3>
         {filteredInventory.length === 0 ? (
@@ -254,17 +206,26 @@ export default function Dashboard({ stats, inventory, onRefresh, onFeedback }) {
         )}
       </div>
 
+      {/* Enhanced Transactions with Price */}
       <div className="transactions-card">
-        <h3>📜 Recent Transactions</h3>
+        <h3>📜 Latest Transactions</h3>
         {transactions.length === 0 ? (
-          <div className="no-transactions">No transactions yet</div>
+          <div className="no-transactions">No transactions yet. Add items to see history!</div>
         ) : (
           <div className="transaction-list">
             {transactions.slice(0, 10).map(txn => (
               <div key={txn.id} className={`transaction-item ${txn.action}`}>
-                <span className="transaction-action">{txn.action === 'add' ? '➕' : '➖'}</span>
-                <span className="transaction-item-name">{txn.item_name}</span>
-                <span className="transaction-quantity">{txn.quantity} units</span>
+                <span className="transaction-icon">{txn.action === 'add' ? '➕' : '➖'}</span>
+                <div className="transaction-details">
+                  <span className="transaction-name">{txn.item_name}</span>
+                  <span className="transaction-qty">{txn.quantity} units</span>
+                  {txn.price > 0 && (
+                    <span className="transaction-price">@ ₹{txn.price.toFixed(2)}</span>
+                  )}
+                  {txn.total_value > 0 && (
+                    <span className="transaction-value">₹{txn.total_value.toFixed(2)}</span>
+                  )}
+                </div>
                 <span className="transaction-time">{formatTime(txn.timestamp)}</span>
               </div>
             ))}
@@ -273,80 +234,160 @@ export default function Dashboard({ stats, inventory, onRefresh, onFeedback }) {
       </div>
 
       <style>{`
-
-  .stats-grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 12px;
-  margin-bottom: 20px;
-}
-
-.stat-card {
-  background:linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  backdrop-filter: blur(10px);
-  padding: 16px 12px;
-  border-radius: 16px;
-  text-align: center;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
-  border: 1px solid rgba(32, 178, 170, 0.2);
-  transition: all 0.3s ease;
-}
-
-.stat-icon {
-  font-size: 28px;
-  margin-bottom: 6px;
-}
-
-.stat-value {
-  font-size: 22px;
-  font-weight: 700;
-  color: #ececec;
-}
-
-.stat-label {
-  font-size: 11px;
-  color: #20B2AA;
-  margin-top: 4px;
-  font-weight: 500;
-  white-space: nowrap;
-}
-        .stat-icon { font-size: 2rem; margin-bottom: 10px; }
-        .stat-value { font-size: 2rem; font-weight: bold; }
-        .stat-label { font-size: 0.8rem; opacity: 0.9; }
-        .alert-card { background: #fff3e0; border-left: 4px solid #ff9800; padding: 15px; border-radius: 10px; margin-bottom: 20px; }
-        .alert-card h3 { margin: 0 0 10px 0; color: #ff9800; }
-        .low-stock-list { display: flex; flex-direction: column; gap: 10px; }
-        .low-stock-item { display: flex; justify-content: space-between; align-items: center; padding: 10px; background: white; border-radius: 8px; flex-wrap: wrap; gap: 10px; }
-        .low-stock-qty { color: #f44336; font-weight: bold; }
-        .restock-btn { background: #4CAF50; color: white; border: none; padding: 6px 15px; border-radius: 5px; cursor: pointer; }
-        .filter-bar { display: flex; gap: 10px; margin-bottom: 20px; flex-wrap: wrap; }
-        .search-input { flex: 1; padding: 10px; border: 1px solid #ddd; border-radius: 8px; min-width: 150px; }
-        .category-select { padding: 10px; border: 1px solid #ddd; border-radius: 8px; background: white; cursor: pointer; }
-        .export-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
-        .export-json, .export-csv, .export-txt, .export-all, .clear-btn { padding: 10px 16px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; }
-        .export-json { background: #2196F3; color: white; }
-        .export-csv { background: #4CAF50; color: white; }
-        .export-txt { background: #FF9800; color: white; }
-        .export-all { background: #9C27B0; color: white; }
-        .clear-btn { background: #f44336; color: white; }
-        .filtered-preview { background: white; padding: 15px; border-radius: 10px; margin-bottom: 20px; }
-        .filtered-preview h3 { margin: 0 0 10px 0; }
+        .stats-grid {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 16px;
+          margin-bottom: 24px;
+        }
+        
+        .stat-card {
+          padding: 20px 16px;
+          border-radius: 20px;
+          text-align: center;
+          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+          color: white;
+          cursor: pointer;
+        }
+        
+        .stat-card:hover {
+          transform: translateY(-4px);
+          box-shadow: 0 12px 28px rgba(0, 0, 0, 0.15);
+        }
+        
+        .stat-card-purple { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+        .stat-card-blue { background: linear-gradient(135deg, #2196F3 0%, #1976D2 100%); }
+        .stat-card-orange { background: linear-gradient(135deg, #FF9800 0%, #F57C00 100%); }
+        .stat-card-green { background: linear-gradient(135deg, #4CAF50 0%, #2E7D32 100%); }
+        
+        .stat-icon { font-size: 2rem; margin-bottom: 8px; }
+        .stat-value { font-size: 1.8rem; font-weight: 700; }
+        .stat-label { font-size: 0.8rem; opacity: 0.9; margin-top: 4px; }
+        
+        .restock-section {
+          background: linear-gradient(135deg, #FFF3E0 0%, #FFE0B2 100%);
+          border-radius: 20px;
+          padding: 16px;
+          margin-bottom: 24px;
+        }
+        
+        .restock-section h3 { margin: 0 0 12px 0; color: #E65100; font-size: 0.9rem; }
+        .restock-list { display: flex; flex-direction: column; gap: 10px; }
+        .restock-item {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          background: white;
+          padding: 12px 16px;
+          border-radius: 14px;
+          flex-wrap: wrap;
+          gap: 10px;
+        }
+        .restock-btn {
+          background: linear-gradient(135deg, #FF9800 0%, #F57C00 100%);
+          color: white;
+          border: none;
+          padding: 8px 20px;
+          border-radius: 30px;
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+        .restock-btn:hover { transform: scale(1.02); box-shadow: 0 2px 8px rgba(255,152,0,0.3); }
+        
+        .filter-bar {
+          display: flex;
+          gap: 10px;
+          margin-bottom: 20px;
+          flex-wrap: wrap;
+        }
+        .search-input {
+          flex: 1;
+          padding: 12px 16px;
+          border: 1px solid #e0e0e0;
+          border-radius: 40px;
+          font-size: 14px;
+          background: white;
+          transition: all 0.2s;
+        }
+        .search-input:focus { border-color: #667eea; box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1); }
+        .category-select {
+          padding: 12px 16px;
+          border: 1px solid #e0e0e0;
+          border-radius: 40px;
+          background: white;
+          cursor: pointer;
+        }
+        .clear-btn {
+          padding: 12px 20px;
+          background: #f5f5f5;
+          border: none;
+          border-radius: 40px;
+          cursor: pointer;
+          transition: all 0.2s;
+        }
+        .clear-btn:hover { background: #e0e0e0; transform: scale(0.98); }
+        
+        .filtered-preview {
+          background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+          padding: 16px;
+          border-radius: 20px;
+          margin-bottom: 24px;
+        }
+        .filtered-preview h3 { margin: 0 0 12px 0; font-size: 1rem; }
         .filtered-list { display: flex; flex-direction: column; gap: 8px; }
-        .filtered-item { display: flex; justify-content: space-between; padding: 10px; border-bottom: 1px solid #eee; }
-        .filtered-item-qty { background: #e0e0e0; padding: 2px 8px; border-radius: 12px; font-size: 12px; }
-        .more-items { text-align: center; color: #666; font-size: 12px; padding: 8px; }
-        .no-items { text-align: center; color: #999; padding: 20px; }
-        .transactions-card { background: white; padding: 15px; border-radius: 10px; }
-        .transactions-card h3 { margin: 0 0 10px 0; }
-        .transaction-list { display: flex; flex-direction: column; gap: 8px; max-height: 300px; overflow-y: auto; }
-        .transaction-item { display: flex; align-items: center; gap: 15px; padding: 10px; border-bottom: 1px solid #eee; }
+        .filtered-item {
+          display: flex;
+          justify-content: space-between;
+          padding: 10px 12px;
+          background: white;
+          border-radius: 12px;
+        }
+        .filtered-item-qty {
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          padding: 2px 10px;
+          border-radius: 20px;
+          font-size: 12px;
+          color: white;
+        }
+        .more-items { text-align: center; color: #667eea; font-size: 12px; padding: 8px; }
+        .no-items { text-align: center; color: #aaa; padding: 24px; }
+        
+        .transactions-card {
+          background: white;
+          padding: 16px;
+          border-radius: 20px;
+          border: 1px solid rgba(102, 126, 234, 0.1);
+        }
+        .transactions-card h3 { margin: 0 0 12px 0; font-size: 1rem; }
+        .transaction-list { display: flex; flex-direction: column; gap: 8px; max-height: 350px; overflow-y: auto; }
+        .transaction-item {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          padding: 12px;
+          background: #f8f9fa;
+          border-radius: 12px;
+          transition: all 0.2s;
+        }
+        .transaction-item:hover { background: #f0f0f5; transform: translateX(4px); }
         .transaction-item.add { border-left: 3px solid #4CAF50; }
         .transaction-item.remove { border-left: 3px solid #f44336; }
-        .transaction-action { font-size: 1.2rem; }
-        .transaction-item-name { flex: 1; font-weight: 500; }
-        .transaction-quantity { color: #666; }
-        .transaction-time { font-size: 0.7rem; color: #999; }
-        .no-transactions { text-align: center; color: #999; padding: 30px; }
+        .transaction-icon { font-size: 1.1rem; min-width: 30px; }
+        .transaction-details { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; flex: 1; }
+        .transaction-name { font-weight: 600; text-transform: capitalize; min-width: 100px; }
+        .transaction-qty { color: #666; font-size: 12px; }
+        .transaction-price { font-size: 11px; color: #FF9800; background: rgba(255,152,0,0.1); padding: 2px 8px; border-radius: 12px; }
+        .transaction-value { font-size: 12px; font-weight: 600; color: #4CAF50; background: rgba(76,175,80,0.1); padding: 2px 10px; border-radius: 12px; }
+        .transaction-time { font-size: 11px; color: #aaa; min-width: 100px; text-align: right; }
+        .no-transactions { text-align: center; color: #aaa; padding: 24px; }
+        
+        @media (max-width: 640px) {
+          .stats-grid { gap: 12px; }
+          .stat-card { padding: 14px 10px; }
+          .stat-value { font-size: 1.4rem; }
+          .transaction-details { flex-wrap: wrap; gap: 6px; }
+          .transaction-time { min-width: auto; }
+        }
       `}</style>
     </div>
   )

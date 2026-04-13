@@ -5,152 +5,153 @@
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-  background: #f5f5f7;
-  color: #1c1c1e;
-  line-height: 1.4;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  background: linear-gradient(135deg, #f5f0ff 0%, #e8f4f8 50%, #f0fdf4 100%);
   min-height: 100vh;
 }
 
+/* App Container */
 .app {
-  max-width: 650px;
+  max-width: 670px;
   margin: 0 auto;
-  background: transparent;
+  padding: 20px;
   min-height: 100vh;
-  box-shadow: 0 0 40px rgba(0, 0, 0, 0.05);
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  transition: background 0.5s ease;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(2px);
+  box-shadow: 0 0 40px rgba(0, 0, 0, 0.02);
+  border-radius: 0;
+  transition: all 0.3s ease;
+}
+
+/* Dashboard Background */
+.app.dashboard {
+  background: linear-gradient(135deg, rgba(230, 247, 245, 0.95) 0%, rgba(240, 253, 244, 0.95) 100%);
+}
+
+/* Voice Tab Background */
+.app.voice {
+  background: linear-gradient(135deg, rgba(245, 240, 255, 0.95) 0%, rgba(248, 245, 255, 0.95) 100%);
+}
+
+/* Camera Tab Background */
+.app.camera {
+  background: linear-gradient(135deg, rgba(255, 245, 235, 0.95) 0%, rgba(255, 248, 240, 0.95) 100%);
 }
 
 /* Header */
-.app-header {
-  background: rgba(255, 255, 255, 0.95);
+header {
+  position: relative;
+  text-align: center;
+  margin-bottom: 30px;
+  padding: 24px 20px;
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 30px;
   backdrop-filter: blur(10px);
-  padding: 20px 20px 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.3);
-  position: sticky;
-  top: 0;
-  z-index: 100;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.5);
 }
 
-.logo {
+/* ==================== OCEAN GREEN FLASHCARD EFFECTS ==================== */
+
+/* Main Title Ocean Flashcard Effect */
+.ocean-flashcard-title {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  justify-content: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
 }
 
-.logo-icon {
-  font-size: 28px;
-}
-
-.logo-text {
-  font-size: 22px;
+.ocean-word {
+  display: inline-block;
+  font-size: 2rem;
   font-weight: 700;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-  -webkit-background-clip: text;
-  -webkit-text-fill-color: transparent;
-  background-clip: text;
+  padding: 12px 24px;
+  background: linear-gradient(135deg, #e0f7fa 0%, #b2ebf2 50%, #80deea 100%);
+  border-radius: 20px;
+  box-shadow: 0 6px 20px rgba(0, 150, 136, 0.2);
+  color: #00695c;
+  border: 1px solid rgba(0, 150, 136, 0.3);
+  /* Ensure text is visible */
+  opacity: 1 !important;
+  visibility: visible !important;
+  text-shadow: none;
 }
 
-.tagline {
-  font-size: 12px;
-  color: #666;
-  margin-top: 4px;
+.ocean-word:nth-child(1) {
+  background: linear-gradient(135deg, #e0f7fa 0%, #b2ebf2 100%);
+  border-bottom: 3px solid #00897b;
 }
 
-/* Bottom Navigation */
-.bottom-nav {
+.ocean-word:nth-child(2) {
+  background: linear-gradient(135deg, #b2ebf2 0%, #80deea 100%);
+  border-bottom: 3px solid #00695c;
+}
+
+.ocean-word:nth-child(3) {
+  background: linear-gradient(135deg, #80deea 0%, #4dd0e1 100%);
+  border-bottom: 3px solid #004d40;
+  color: #004d40;
+}
+
+/* Hover effect */
+.ocean-word:hover {
+  transform: scale(1.02);
+  box-shadow: 0 8px 25px rgba(0, 150, 136, 0.3);
+}
+
+/* Tagline - NO DOTS */
+.tagline-flashcard {
   display: flex;
-  background: rgba(255, 255, 255, 0.95);
-  backdrop-filter: blur(10px);
-  border-top: 1px solid rgba(255, 255, 255, 0.3);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.3);
-  position: sticky;
-  top: 0;
-  z-index: 99;
-}
-
-.nav-item {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
+  justify-content: center;
   align-items: center;
-  gap: 4px;
-  padding: 10px 0;
-  background: none;
-  border: none;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  font-family: inherit;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 10px;
 }
 
-.nav-icon {
-  font-size: 22px;
-  opacity: 0.6;
-  transition: all 0.3s ease;
-}
-
-.nav-label {
-  font-size: 11px;
+.tagline-word {
+  display: inline-block;
+  font-size: 0.9rem;
   font-weight: 500;
-  color: #666;
-  transition: all 0.3s ease;
+  padding: 8px 18px;
+  background: linear-gradient(135deg, #e0f7fa 0%, #b2ebf2 100%);
+  border-radius: 30px;
+  box-shadow: 0 2px 10px rgba(0, 150, 136, 0.1);
+  color: #00695c;
+  opacity: 1 !important;
+  visibility: visible !important;
 }
 
-.nav-item.active .nav-icon {
-  opacity: 1;
-  transform: translateY(-2px);
+/* Hide any dots */
+.tagline-flashcard .dot,
+.tagline-separator {
+  display: none;
 }
 
-.nav-item.active .nav-label {
+.tagline-word:hover {
+  transform: scale(1.02);
+  box-shadow: 0 4px 12px rgba(0, 150, 136, 0.2);
+}
+
+/* Ocean Highlight Word */
+.tagline-word.ocean-highlight {
+  background: linear-gradient(135deg, #00897b 0%, #00695c 100%);
+  color: white;
+  box-shadow: 0 4px 15px rgba(0, 105, 92, 0.3);
   font-weight: 600;
 }
 
-/* Dashboard active - Torquoise */
-.nav-item.active .nav-label {
-  color: #20B2AA;
+.tagline-word.ocean-highlight:hover {
+  transform: scale(1.02);
+  box-shadow: 0 6px 20px rgba(0, 105, 92, 0.4);
 }
 
-/* Voice active - Green */
-.nav-item:nth-child(2).active .nav-label {
-  color: #4CAF50;
-}
-
-/* Camera active - Orange */
-.nav-item:nth-child(3).active .nav-label {
-  color: #FF9800;
-}
-
-/* Main Content */
-.main-content {
-  flex: 1;
-  padding: 20px;
-  background: transparent;
-  min-height: 300px;
-}
-
-/* Scrollbar */
-::-webkit-scrollbar {
-  width: 4px;
-}
-
-::-webkit-scrollbar-track {
-  background: rgba(0, 0, 0, 0.05);
-  border-radius: 4px;
-}
-
-::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.2);
-  border-radius: 4px;
-}
-
-/* Animations */
-@keyframes slideIn {
+/* Fade-in animation */
+@keyframes fadeIn {
   from {
     opacity: 0;
-    transform: translateY(10px);
+    transform: translateY(-10px);
   }
   to {
     opacity: 1;
@@ -158,28 +159,191 @@ body {
   }
 }
 
-@keyframes pulse {
-  0% {
-    transform: scale(1);
-    box-shadow: 0 0 0 0 rgba(102, 126, 234, 0.4);
-  }
-  70% {
-    transform: scale(1.02);
-    box-shadow: 0 0 0 10px rgba(102, 126, 234, 0);
-  }
-  100% {
-    transform: scale(1);
-    box-shadow: 0 0 0 0 rgba(102, 126, 234, 0);
-  }
+.ocean-word, .tagline-word {
+  animation: fadeIn 0.5s ease forwards;
+}
+
+.ocean-word:nth-child(1) { animation: fadeIn 0.3s forwards; }
+.ocean-word:nth-child(2) { animation: fadeIn 0.5s forwards; }
+.ocean-word:nth-child(3) { animation: fadeIn 0.7s forwards; }
+
+.tagline-word:nth-child(1) { animation: fadeIn 0.4s forwards; }
+.tagline-word:nth-child(2) { animation: fadeIn 0.5s forwards; }
+.tagline-word:nth-child(3) { animation: fadeIn 0.6s forwards; }
+.tagline-word:nth-child(4) { animation: fadeIn 0.7s forwards; }
+
+/* Loading Indicator */
+.loading-indicator {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.95);
+  padding: 6px 14px;
+  border-radius: 30px;
+  font-size: 12px;
+  color: #667eea;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid #e0e0e0;
+  border-top-color: #667eea;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Navigation Tabs */
+.tabs {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 25px;
+  background: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(10px);
+  padding: 6px;
+  border-radius: 60px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.03);
+}
+
+.tabs button {
+  flex: 1;
+  padding: 12px 20px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  background: transparent;
+  border: none;
+  border-radius: 50px;
+  color: #5a6e6c;
+  cursor: pointer;
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.tabs button.active {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+  transform: translateY(-2px);
+}
+
+.tabs button:hover:not(.active) {
+  background: rgba(255, 255, 255, 0.6);
+  transform: translateY(-1px);
+}
+
+.tab-icon {
+  font-size: 1.1rem;
+}
+
+/* Main Content */
+.main-content {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(10px);
+  border-radius: 28px;
+  padding: 24px;
+  margin-bottom: 24px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.03);
+  transition: all 0.3s ease;
+}
+
+/* Error Banner */
+.error-banner {
+  background: linear-gradient(135deg, #ffebee 0%, #ffcdd2 100%);
+  border-left: 4px solid #f44336;
+  padding: 12px 16px;
+  border-radius: 12px;
+  margin-bottom: 20px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  color: #c62828;
+  animation: fadeIn 0.3s ease;
+}
+
+.error-banner button {
+  margin-left: auto;
+  background: #f44336;
+  color: white;
+  border: none;
+  padding: 5px 14px;
+  border-radius: 20px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  transition: all 0.2s;
+}
+
+.error-banner button:hover {
+  background: #d32f2f;
+  transform: scale(1.02);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.05);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 10px;
 }
 
 /* Responsive */
-@media (max-width: 480px) {
+@media (max-width: 768px) {
   .app {
-    max-width: 100%;
+    padding: 12px;
+  }
+  
+  .tabs button {
+    padding: 10px 12px;
+    font-size: 0.85rem;
+  }
+  
+  .tab-label {
+    display: none;
+  }
+  
+  .tab-icon {
+    font-size: 1.3rem;
   }
   
   .main-content {
     padding: 16px;
+  }
+  
+  .ocean-word {
+    font-size: 1.3rem;
+    padding: 8px 16px;
+  }
+  
+  .tagline-word {
+    font-size: 0.75rem;
+    padding: 5px 12px;
+  }
+  
+  .ocean-flashcard-title {
+    gap: 10px;
+  }
+  
+  .tagline-flashcard {
+    gap: 8px;
   }
 }

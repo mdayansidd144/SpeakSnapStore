@@ -1,139 +1,283 @@
-
-from fastapi import APIRouter, UploadFile, File
-from ai_models.cnn_detector import detector
+from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks, status, Request
+from fastapi.responses import JSONResponse
+from typing import List, Optional
+import cv2
+import numpy as np
 import tempfile
 import os
-import cv2
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import base64
+from datetime import datetime
+import logging
+from ai_models.cnn_detector import detector
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# Constants for video processing
-MAX_VIDEO_SIZE = 50 * 1024 * 1024  # 50MB
-MAX_FRAMES = 300  # Max frames to process
+# Thread pool for CPU-intensive operations
+executor = ThreadPoolExecutor(max_workers=2)
+
+# ==================== HELPER FUNCTIONS ====================
+
+async def process_image_async(image_bytes: bytes) -> tuple:
+    """Process image asynchronously"""
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        executor, 
+        detector.detect_from_bytes, 
+        image_bytes
+    )
+
+def decode_base64_image(base64_str: str) -> bytes:
+    """Decode base64 image to bytes"""
+    try:
+        if ',' in base64_str:
+            base64_str = base64_str.split(',')[1]
+        return base64.b64decode(base64_str)
+    except Exception as e:
+        logger.error(f"Base64 decode error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid base64 image data"
+        )
+
+def get_image_size(image_bytes: bytes) -> tuple:
+    """Get image dimensions without saving to disk"""
+    try:
+        nparr = np.frombuffer(image_bytes, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if img is not None:
+            return img.shape[1], img.shape[0]  # width, height
+        return (0, 0)
+    except Exception as e:
+        logger.error(f"Error getting image size: {e}")
+        return (0, 0)
+
+# ==================== MAIN DETECTION ENDPOINTS ====================
 
 @router.post("/detect")
-async def detect_object(image: UploadFile = File(...)):
-    """Detect object from camera image"""
+async def detect_object(
+    image: UploadFile = File(...),
+    background_tasks: BackgroundTasks = None
+):
+    """Detect object from camera image or uploaded file"""
+    
+    # Validate file type
+    if not image.content_type or not image.content_type.startswith('image/'):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid file type. Please upload an image."
+        )
+    
+    # Read image
+    content = await image.read()
+    
+    if len(content) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Empty image file"
+        )
+    
+    # Get image info
+    width, height = get_image_size(content)
+    
     try:
-        content = await image.read()
+        # Process detection asynchronously
+        item, confidence = await process_image_async(content)
         
-        if not content:
-            return {"success": False, "error": "Empty image", "detected_item": "unknown", "confidence": 0}
-        
-        print(f"[Vision] Received image: {len(content)} bytes")
-        
-        item, confidence = detector.detect_from_bytes(content)
-        
-        print(f"[Vision] Detection result: {item} ({confidence:.2f})")
-        
-        return {
-            "detected_item": item,
-            "confidence": float(confidence),
-            "success": True
+        # Prepare response
+        response = {
+            "detected_item": item if item != "error" else "unknown",
+            "confidence": round(float(confidence), 4),
+            "success": item != "error",
+            "image_info": {
+                "width": width,
+                "height": height,
+                "size_bytes": len(content)
+            },
+            "timestamp": datetime.now().isoformat()
         }
+        
+        # Add to background tasks for logging (optional)
+        if background_tasks:
+            background_tasks.add_task(
+                log_detection,
+                item,
+                confidence,
+                len(content)
+            )
+        
+        return response
+        
     except Exception as e:
-        print(f"[Vision] Error: {e}")
-        return {
-            "success": False,
-            "error": str(e),
-            "detected_item": "error",
-            "confidence": 0
-        }
+        logger.error(f"Detection error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Detection failed: {str(e)}"
+        )
 
-@router.post("/detect-video")
-async def detect_video(video: UploadFile = File(...)):
-    """Detect objects from video file (MP4, AVI, MOV)"""
-    tmp_path = None
+@router.post("/detect/batch")
+async def detect_batch(
+    images: List[UploadFile] = File(...),
+    max_parallel: int = 3
+):
+    """Detect objects in multiple images"""
+    
+    if len(images) > 10:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Maximum 10 images per batch"
+        )
+    
+    results = []
+    
+    for img in images:
+        if not img.content_type or not img.content_type.startswith('image/'):
+            results.append({
+                "filename": img.filename,
+                "error": "Invalid file type",
+                "success": False
+            })
+            continue
+        
+        content = await img.read()
+        
+        if len(content) == 0:
+            results.append({
+                "filename": img.filename,
+                "error": "Empty file",
+                "success": False
+            })
+            continue
+        
+        try:
+            item, confidence = await process_image_async(content)
+            results.append({
+                "filename": img.filename,
+                "detected_item": item if item != "error" else "unknown",
+                "confidence": round(float(confidence), 4),
+                "success": item != "error"
+            })
+        except Exception as e:
+            results.append({
+                "filename": img.filename,
+                "error": str(e),
+                "success": False
+            })
+    
+    return {
+        "success": True,
+        "total_images": len(images),
+        "detections": results,
+        "timestamp": datetime.now().isoformat()
+    }
+
+@router.post("/detect/base64")
+async def detect_base64(
+    data: dict,
+    background_tasks: BackgroundTasks = None
+):
+    """Detect object from base64 encoded image"""
+    
+    if 'image' not in data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing 'image' field in request body"
+        )
+    
     try:
-        content = await video.read()
-        
-        # Check file size
-        if len(content) > MAX_VIDEO_SIZE:
-            return {"success": False, "error": f"Video too large (max {MAX_VIDEO_SIZE//(1024*1024)}MB)", "detections": []}
-        
-        # Save uploaded video temporarily
-        with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as tmp:
-            tmp.write(content)
-            tmp_path = tmp.name
-        
-        print(f"[Vision] Saved video: {tmp_path}")
-        print(f"[Vision] Video size: {len(content)} bytes")
-        
-        # Open video with OpenCV
-        cap = cv2.VideoCapture(tmp_path)
-        
-        if not cap.isOpened():
-            return {"success": False, "error": "Could not open video file", "detections": []}
-        
-        # Get video info
-        fps = cap.get(cv2.CAP_PROP_FPS)
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        print(f"[Vision] Video FPS: {fps}, Total frames: {total_frames}")
-        
-        # Process every N frames (skip for speed)
-        frame_skip = max(1, int(fps / 2))  # Process 2 frames per second
-        frame_count = 0
-        detected_items = {}
-        
-        while frame_count < MAX_FRAMES:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            
-            # Process every Nth frame
-            if frame_count % frame_skip == 0:
-                # Save frame as temp image
-                with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as img_tmp:
-                    cv2.imwrite(img_tmp.name, frame)
-                    
-                    # Read and detect using consistent method
-                    with open(img_tmp.name, 'rb') as f:
-                        img_bytes = f.read()
-                    item, confidence = detector.detect_from_bytes(img_bytes)
-                    
-                    # Clean up
-                    os.unlink(img_tmp.name)
-                    
-                    if item != "unknown" and confidence > 0.3:
-                        if item not in detected_items:
-                            detected_items[item] = {
-                                'item': item,
-                                'confidence': confidence,
-                                'first_seen': frame_count
-                            }
-                        else:
-                            if confidence > detected_items[item]['confidence']:
-                                detected_items[item]['confidence'] = confidence
-            
-            frame_count += 1
-        
-        cap.release()
-        if tmp_path and os.path.exists(tmp_path):
-            os.unlink(tmp_path)
-        
-        detections_list = list(detected_items.values())
-        
-        print(f"[Vision] Detected {len(detections_list)} unique objects")
+        image_bytes = decode_base64_image(data['image'])
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid base64 data: {str(e)}"
+        )
+    
+    width, height = get_image_size(image_bytes)
+    
+    try:
+        item, confidence = await process_image_async(image_bytes)
         
         return {
-            "success": True,
-            "detections": detections_list,
-            "total_frames": frame_count,
-            "message": f"Detected {len(detections_list)} objects in video"
+            "detected_item": item if item != "error" else "unknown",
+            "confidence": round(float(confidence), 4),
+            "success": item != "error",
+            "image_info": {
+                "width": width,
+                "height": height,
+                "size_bytes": len(image_bytes)
+            },
+            "timestamp": datetime.now().isoformat()
         }
         
     except Exception as e:
-        print(f"[Vision] Error: {e}")
-        import traceback
-        traceback.print_exc()
-        if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.unlink(tmp_path)
-            except:
-                pass
-        return {"success": False, "error": str(e), "detections": []}
+        logger.error(f"Detection error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Detection failed: {str(e)}"
+        )
+
+@router.get("/info")
+async def get_model_info():
+    """Get information about the detection model"""
+    return {
+        "model_name": "MobileNetV2",
+        "model_type": "CNN",
+        "input_size": "224x224",
+        "classes": 1000,
+        "framework": "TensorFlow/Keras",
+        "status": "active"
+    }
+
+@router.get("/supported-objects")
+async def get_supported_objects():
+    """Get list of common objects the model can detect"""
+    common_objects = [
+        "apple", "banana", "orange", "strawberry", "grape",
+        "bottle", "cup", "book", "laptop", "phone",
+        "keyboard", "mouse", "chair", "table", "monitor",
+        "car", "bicycle", "dog", "cat", "bird",
+        "pizza", "burger", "sandwich", "cake", "donut"
+    ]
+    
+    return {
+        "total_objects": len(common_objects),
+        "common_objects": common_objects[:20],
+        "note": "Model can detect up to 1000 different objects"
+    }
+
+@router.get("/health")
+async def health_check():
+    """Health check for vision service"""
+    try:
+        test_result = detector is not None
+        
+        return {
+            "status": "healthy" if test_result else "degraded",
+            "model_loaded": test_result,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return {
+            "status": "unhealthy",
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
 
 @router.get("/test")
 async def test_detection():
     """Test if vision API is working"""
-    return {"status": "ok", "message": "Vision API with YOLO is working"}
+    return {
+        "status": "ok",
+        "message": "Vision API is working",
+        "model_loaded": detector is not None,
+        "timestamp": datetime.now().isoformat()
+    }
+
+# ==================== LOGGING FUNCTION ====================
+
+async def log_detection(item: str, confidence: float, image_size: int):
+    """Background task to log detection events"""
+    logger.info(f"Detection: {item} (confidence: {confidence:.2f}) - Size: {image_size} bytes")

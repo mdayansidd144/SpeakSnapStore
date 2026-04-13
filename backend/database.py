@@ -1,432 +1,637 @@
-import csv
+import sqlite3
 import os
 import re
 import json
-from datetime import datetime
-from typing import List, Dict, Any, Optional
-import time
+import asyncio
+import threading
 import random
-import psycopg2
-from psycopg2.extras import RealDictCursor
-from contextlib import contextmanager
-from io import StringIO
+from contextlib import contextmanager, asynccontextmanager
+from datetime import datetime
+from typing import List, Dict, Any, Optional, Tuple
+from concurrent.futures import ThreadPoolExecutor
+import functools
+import hashlib
+from collections import OrderedDict
+import time
 
-# Database URLs - will be set from environment variables
-DATABASE_URL = os.getenv('DATABASE_URL', 'postgresql://postgres:postgres@localhost:5432/inventory_db')
-HISTORY_DATABASE_URL = os.getenv('HISTORY_DATABASE_URL', 'postgresql://postgres:postgres@localhost:5432/history_db')
+#CONFIGURATION 
+DB_PATH = os.getenv('SQLITE_PATH', os.path.join(os.path.dirname(__file__), 'database', 'inventory.db'))
+CACHE_SIZE = 1000
+CACHE_TTL = 30  # seconds
 
-# ==================== UTILITY FUNCTIONS ====================
+# Thread pool for async operations
+executor = ThreadPoolExecutor(max_workers=4)
 
-def clean_item_name(name: str) -> str:
-    """Clean item name - removes punctuation, numbers, and number words"""
-    name = name.lower().strip()
-    name = re.sub(r'[^\w\s]', '', name)
-    name = re.sub(r'\d+', '', name)
+# Simple in-memory cache
+class TimeoutCache:
+    def __init__(self, maxsize=1000, ttl=30):
+        self.cache = OrderedDict()
+        self.maxsize = maxsize
+        self.ttl = ttl
+        self.lock = threading.Lock()
     
-    number_words = ['one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',
-                   'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen',
-                   'eighteen', 'nineteen', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 
-                   'eighty', 'ninety', 'hundred', 'thousand']
-    for word in number_words:
-        name = name.replace(word, '')
+    def get(self, key):
+        with self.lock:
+            if key in self.cache:
+                value, timestamp = self.cache[key]
+                if time.time() - timestamp < self.ttl:
+                    self.cache.move_to_end(key)
+                    return value
+                else:
+                    del self.cache[key]
+        return None
     
-    name = re.sub(r'\s+', ' ', name).strip()
-    return name if name else 'item'
+    def set(self, key, value):
+        with self.lock:
+            if key in self.cache:
+                self.cache.move_to_end(key)
+            self.cache[key] = (value, time.time())
+            if len(self.cache) > self.maxsize:
+                self.cache.popitem(last=False)
+    
+    def invalidate(self, pattern=None):
+        with self.lock:
+            if pattern is None:
+                self.cache.clear()
+            else:
+                keys_to_remove = [k for k in self.cache if pattern in k]
+                for k in keys_to_remove:
+                    del self.cache[k]
 
-def standardize_name(name: str) -> str:
-    """Convert to singular form - works for ANY word dynamically"""
-    name = clean_item_name(name)
-    
-    if not name or name == '':
-        return 'item'
-    
-    if name.endswith('s') and len(name) > 1 and not name.endswith('ss'):
-        if name.endswith('ies'):
-            return name[:-3] + 'y'
-        elif name.endswith('ves'):
-            return name[:-3] + 'f'
-        elif name.endswith('oes'):
-            return name[:-2]
-        else:
-            return name[:-1]
-    
-    return name
+# Global cache instance
+cache = TimeoutCache(maxsize=CACHE_SIZE, ttl=CACHE_TTL)
 
-def generate_unique_id() -> str:
-    """Generate unique item ID"""
-    return f"item_{int(time.time() * 1000000)}_{random.randint(1000, 9999)}"
+# DYNAMIC PRICING
 
-def get_random_price(item_name: str) -> float:
-    """Generate realistic price based on item name"""
+def get_realistic_price(item_name: str) -> float:
+    """Generate realistic price based on item type"""
+    item_name = item_name.lower()
+    
+    # Price mapping for common items (realistic market prices)
     price_map = {
-        'apple': 0.50, 'banana': 0.30, 'orange': 0.40, 'mango': 1.00, 'grape': 0.20,
-        'biscuit': 10.0, 'namkeen': 15.0, 'chips': 20.0, 'cookie': 5.0, 'chocolate': 25.0,
-        'pencil': 5.0, 'pen': 10.0, 'notebook': 30.0, 'eraser': 3.0, 'sharpener': 4.0,
-        'cake': 50.0, 'bread': 25.0, 'milk': 30.0, 'egg': 6.0, 'butter': 45.0,
-        'rice': 60.0, 'wheat': 45.0, 'sugar': 40.0, 'salt': 20.0, 'oil': 110.0,
-        'tea': 250.0, 'coffee': 300.0, 'soap': 35.0, 'shampoo': 150.0, 'toothpaste': 80.0
+        # Fruits (per piece)
+        'apple': 5.0, 'banana': 3.0, 'orange': 2.5, 'mango': 3.0,
+        'grape': 2.0, 'strawberry': 0.60, 'watermelon': 3.00, 'pineapple': 2.5,
+        'pear': 5.0, 'peach': 8.0, 'kiwi': 20.0, 'lemon': 3.5,
+        
+        # Vegetables (per piece or kg)
+        'tomato': 4.0, 'potato': 2.5, 'onion': 3.0, 'carrot': 3.5,
+        'cucumber': 4.5, 'broccoli': 6.20, 'cauliflower': 4.00, 'cabbage': 6.0,
+        'spinach': 5.0, 'bell pepper': 7.0, 'chili': 1.0, 'garlic': 2.5,
+        
+        # Snacks (per packet)
+        'biscuit': 10.0, 'cookie': 15.0, 'chocolate': 25.0, 'chips': 20.0,
+        'namkeen': 15.0, 'cake': 50.0, 'donut': 30.0, 'ice cream': 40.0,
+        
+        # Stationery (per piece)
+        'pen': 10.0, 'pencil': 5.0, 'eraser': 3.0, 'sharpener': 4.0,
+        'notebook': 30.0, 'ruler': 8.0, 'marker': 12.0, 'highlighter': 15.0,
+        
+        # Household
+        'bottle': 25.0, 'cup': 15.0, 'plate': 20.0, 'bowl': 18.0,
+        'spoon': 5.0, 'fork': 5.0, 'knife': 8.0, 'glass': 12.0,
+        
+        # Electronics
+        'battery': 100.0, 'charger': 250.0, 'cable': 80.0, 'headphone': 300.0,
+        
+        # Dairy
+        'milk': 30.0, 'butter': 45.0, 'cheese': 80.0, 'yogurt': 25.0,
+        
+        # Grains (per kg)
+        'rice': 60.0, 'wheat': 45.0, 'flour': 40.0, 'sugar': 40.0,
+        'salt': 20.0, 'oil': 110.0, 'spice': 50.0,
+        
+        # Beverages
+        'tea': 250.0, 'coffee': 300.0, 'juice': 80.0, 'soda': 35.0,
+        
+        # Personal care
+        'soap': 35.0, 'shampoo': 150.0, 'toothpaste': 80.0, 'brush': 25.0,
     }
     
-    if item_name in price_map:
-        return price_map[item_name]
-    return round(random.uniform(10, 500), 2)
+    # Check for exact match
+    for key, price in price_map.items():
+        if key in item_name:
+            return price
+    
+    # Generate random price based on item name length (10-500 range)
+    base_price = random.uniform(10, 100)
+    if len(item_name) > 10:
+        base_price *= 1.5
+    return round(base_price, 2)
 
-# ==================== DATABASE CONNECTION ====================
+# DATABASE CONNECTION POOL
+class ConnectionPool:
+    """Thread-safe connection pool for SQLite"""
+    def __init__(self, max_connections=5):
+        self.max_connections = max_connections
+        self._pool = []
+        self._lock = threading.Lock()
+    
+    def get_connection(self):
+        with self._lock:
+            if self._pool:
+                return self._pool.pop()
+            return self._create_connection()
+    
+    def return_connection(self, conn):
+        with self._lock:
+            if len(self._pool) < self.max_connections:
+                self._pool.append(conn)
+            else:
+                conn.close()
+    
+    def _create_connection(self):
+        os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+        conn = sqlite3.connect(DB_PATH, timeout=10, isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        # Aggressive performance optimizations
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA cache_size=-20000")  # 20MB cache
+        conn.execute("PRAGMA temp_store=MEMORY")
+        conn.execute("PRAGMA mmap_size=268435456")  # 256MB mmap
+        conn.execute("PRAGMA optimize")
+        return conn
+
+# Global connection pool
+pool = ConnectionPool(max_connections=10)
 
 @contextmanager
 def get_db():
-    """Get PostgreSQL database connection"""
-    conn = psycopg2.connect(DATABASE_URL)
-    conn.autocommit = False
+    """Fast database connection from pool"""
+    conn = pool.get_connection()
     try:
         yield conn
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        raise e
     finally:
-        conn.close()
+        pool.return_connection(conn)
 
-@contextmanager
-def get_history_db():
-    """Get history database connection"""
-    conn = psycopg2.connect(HISTORY_DATABASE_URL)
-    conn.autocommit = False
-    try:
-        yield conn
-        conn.commit()
-    except Exception as e:
-        conn.rollback()
-        raise e
-    finally:
-        conn.close()
+# Async wrapper for database operations
+def run_in_executor(func):
+    @functools.wraps(func)
+    async def wrapper(*args, **kwargs):
+        return await asyncio.get_event_loop().run_in_executor(executor, lambda: func(*args, **kwargs))
+    return wrapper
 
+# ==================== DATABASE INITIALIZATION ====================
 def init_db():
-    """Initialize database with fresh schema"""
-    try:
-        conn = psycopg2.connect(DATABASE_URL)
-        conn.autocommit = True
-        cur = conn.cursor()
-        
-        cur.execute("DROP TABLE IF EXISTS items")
-        
-        cur.execute('''
-            CREATE TABLE items (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL UNIQUE,
+    """Initialize database with optimized schema and indexes"""
+    with get_db() as conn:
+        # Items table with optimized schema
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE COLLATE NOCASE,
                 quantity INTEGER DEFAULT 0,
                 category TEXT DEFAULT 'general',
                 unit TEXT DEFAULT 'piece',
                 price REAL DEFAULT 0.0,
+                total_value REAL GENERATED ALWAYS AS (quantity * price) STORED,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_name ON items(name)")
-        
-        sample_items = [
-            (generate_unique_id(), 'biscuit', 10, 'snacks', 'packet', 10.0),
-            (generate_unique_id(), 'namkeen', 8, 'snacks', 'packet', 15.0),
-            (generate_unique_id(), 'apple', 12, 'fruits', 'piece', 0.50),
-            (generate_unique_id(), 'banana', 5, 'fruits', 'piece', 0.30),
-            (generate_unique_id(), 'orange', 8, 'fruits', 'piece', 0.40),
-        ]
-        
-        for item in sample_items:
-            cur.execute('''
-                INSERT INTO items (id, name, quantity, category, unit, price)
-                VALUES (%s, %s, %s, %s, %s, %s)
-            ''', item)
-        
-        conn.commit()
-        cur.close()
-        conn.close()
-        
-        print("[DB] PostgreSQL database initialized with sample data")
-    except Exception as e:
-        print(f"[DB] Error initializing database: {e}")
-        raise
-
-def init_history_db():
-    """Initialize transaction history database"""
-    try:
-        conn = psycopg2.connect(HISTORY_DATABASE_URL)
-        conn.autocommit = True
-        cur = conn.cursor()
-        
-        cur.execute('''
+        # Transactions table with price tracking
+        conn.execute('''
             CREATE TABLE IF NOT EXISTS transactions (
-                id SERIAL PRIMARY KEY,
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
                 transaction_id TEXT UNIQUE,
                 action TEXT NOT NULL,
                 item_name TEXT NOT NULL,
-                quantity INTEGER DEFAULT 0,
+                quantity INTEGER NOT NULL,
                 previous_quantity INTEGER DEFAULT 0,
                 new_quantity INTEGER DEFAULT 0,
+                price REAL DEFAULT 0.0,
+                total_value REAL DEFAULT 0.0,
                 timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
         
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_item_name ON transactions(item_name)")
-        cur.execute("CREATE INDEX IF NOT EXISTS idx_timestamp ON transactions(timestamp)")
+        # Comprehensive indexes for lightning-fast queries
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_items_name ON items(name)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_items_category ON items(category)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_items_quantity ON items(quantity)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_items_updated ON items(updated_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_transactions_item ON transactions(item_name)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_transactions_time ON transactions(timestamp DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_transactions_action ON transactions(action)")
         
-        conn.commit()
-        cur.close()
-        conn.close()
-    except Exception as e:
-        print(f"[DB] Error initializing history database: {e}")
+        # Composite indexes for complex queries
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_items_category_quantity ON items(category, quantity)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_transactions_item_time ON transactions(item_name, timestamp DESC)")
+        
+        # Insert sample data if empty
+        cursor = conn.execute("SELECT COUNT(*) FROM items")
+        if cursor.fetchone()[0] == 0:
+            sample_items = [
+                ('apple', 12, 'fruits', 'piece', 0.50),
+                ('banana', 5, 'fruits', 'piece', 0.30),
+                ('orange', 8, 'fruits', 'piece', 0.40),
+                ('biscuit', 10, 'snacks', 'packet', 10.0),
+                ('namkeen', 8, 'snacks', 'packet', 15.0),
+            ]
+            conn.executemany('''INSERT INTO items (name, quantity, category, unit, price) 
+                               VALUES (?, ?, ?, ?, ?)''', sample_items)
+    
+    cache.invalidate()
+    print("[DB] ⚡ Database initialized with ultra-fast optimizations")
 
-# ==================== CORE OPERATIONS ====================
+# ==================== UTILITY FUNCTIONS ====================
+def standardize_name(name: str) -> str:
+    """Fast name standardization with caching"""
+    name = name.lower().strip()
+    name = re.sub(r'[^\w\s]', '', name)
+    name = re.sub(r'\d+', '', name)
+    name = re.sub(r'\s+', ' ', name).strip()
+    
+    if name.endswith('s') and len(name) > 1 and not name.endswith('ss'):
+        if name.endswith('ies'):
+            name = name[:-3] + 'y'
+        elif name.endswith('ves'):
+            name = name[:-3] + 'f'
+        else:
+            name = name[:-1]
+    return name if name and len(name) > 1 else 'item'
+
+def generate_transaction_id() -> str:
+    """Generate unique transaction ID"""
+    return f"txn_{int(time.time() * 1000000)}_{random.randint(1000, 9999)}"
+
+# ==================== CORE CRUD OPERATIONS (OPTIMIZED) ====================
 
 def get_all_items() -> List[Dict[str, Any]]:
-    """Get all inventory items with calculated total value"""
+    """Get all items with caching - ULTRA FAST"""
+    cache_key = 'all_items'
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+    
     with get_db() as conn:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SELECT * FROM items ORDER BY name")
-        items = cur.fetchall()
-        cur.close()
+        items = []
+        cursor = conn.execute("SELECT * FROM items ORDER BY name")
+        for row in cursor:
+            item = dict(row)
+            items.append(item)
         
-        result = []
-        for item in items:
-            item_dict = dict(item)
-            item_dict['total_value'] = item_dict['quantity'] * item_dict.get('price', 0)
-            result.append(item_dict)
-        return result
+        cache.set(cache_key, items)
+        return items
+
+@run_in_executor
+async def get_all_items_async():
+    """Async version for non-blocking operations"""
+    return get_all_items()
 
 def get_item_by_name(name: str) -> Optional[Dict[str, Any]]:
+    """Get single item with caching"""
     name = standardize_name(name)
+    cache_key = f'item_{name}'
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+    
     with get_db() as conn:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SELECT * FROM items WHERE name = %s", (name,))
-        result = cur.fetchone()
-        cur.close()
-        
-        if result:
-            item_dict = dict(result)
-            item_dict['total_value'] = item_dict['quantity'] * item_dict.get('price', 0)
-            return item_dict
-        return None
+        result = conn.execute("SELECT * FROM items WHERE name = ?", (name,)).fetchone()
+        item = dict(result) if result else None
+        if item:
+            cache.set(cache_key, item)
+        return item
 
 def add_item(name: str, quantity: int, category: str = 'general', unit: str = 'piece', price: float = None) -> bool:
-    """Add item - REAL-TIME dynamic"""
+    """Add item - INSTANT with cache invalidation and dynamic pricing"""
     name = standardize_name(name)
-    
-    if not name or name == 'item' or len(name) < 2:
+    if not name or len(name) < 2 or quantity <= 0:
         return False
     
-    if quantity <= 0:
-        return False
-    
-    if price is None:
-        price = get_random_price(name)
+    # Auto-assign price if not provided
+    if price is None or price == 0:
+        price = get_realistic_price(name)
     
     with get_db() as conn:
-        cur = conn.cursor()
-        
-        cur.execute("SELECT id, quantity, price FROM items WHERE name = %s", (name,))
-        existing = cur.fetchone()
+        existing = conn.execute("SELECT id, quantity, price FROM items WHERE name = ?", (name,)).fetchone()
         
         if existing:
-            old_qty = existing[1]
+            old_qty = existing['quantity']
             new_qty = old_qty + quantity
-            cur.execute('''
-                UPDATE items 
-                SET quantity = %s, updated_at = CURRENT_TIMESTAMP 
-                WHERE name = %s
-            ''', (new_qty, name))
-            log_transaction('add', name, quantity, old_qty, new_qty)
+            # Keep existing price if already set
+            if existing['price'] == 0:
+                conn.execute('''UPDATE items SET quantity = ?, price = ?, updated_at = CURRENT_TIMESTAMP 
+                               WHERE name = ?''', (new_qty, price, name))
+            else:
+                conn.execute('''UPDATE items SET quantity = ?, updated_at = CURRENT_TIMESTAMP 
+                               WHERE name = ?''', (new_qty, name))
+                price = existing['price']
+            
+            total_value = price * quantity
+            log_transaction('add', name, quantity, old_qty, new_qty, price, total_value)
         else:
-            item_id = generate_unique_id()
-            cur.execute('''
-                INSERT INTO items (id, name, quantity, category, unit, price, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            ''', (item_id, name, quantity, category, unit, price))
-            log_transaction('add', name, quantity, 0, quantity)
-        
-        cur.close()
-        return True
+            conn.execute('''INSERT INTO items (name, quantity, category, unit, price) 
+                           VALUES (?, ?, ?, ?, ?)''', (name, quantity, category, unit, price))
+            total_value = price * quantity
+            log_transaction('add', name, quantity, 0, quantity, price, total_value)
+    
+    # Invalidate caches
+    cache.invalidate()
+    return True
 
 def remove_item(name: str, quantity: int) -> bool:
-    """Remove item - REAL-TIME dynamic"""
+    """Remove item - INSTANT with cache invalidation and transaction logging"""
     name = standardize_name(name)
-    
-    if not name or name == 'item':
-        return False
-    
-    if quantity <= 0:
+    if not name or len(name) < 2 or quantity <= 0:
         return False
     
     with get_db() as conn:
-        cur = conn.cursor()
-        
-        cur.execute("SELECT id, name, quantity FROM items WHERE name = %s", (name,))
-        existing = cur.fetchone()
-        
+        existing = conn.execute("SELECT id, name, quantity, price FROM items WHERE name = ?", (name,)).fetchone()
         if not existing:
-            cur.close()
             return False
         
-        current_qty = existing[2]
-        
+        current_qty = existing['quantity']
         if quantity > current_qty:
-            cur.close()
             return False
         
+        price = existing['price'] if existing['price'] else get_realistic_price(name)
         new_qty = current_qty - quantity
+        total_value = price * quantity
         
         if new_qty <= 0:
-            cur.execute("DELETE FROM items WHERE name = %s", (name,))
-            log_transaction('delete', name, quantity, current_qty, 0)
+            conn.execute("DELETE FROM items WHERE name = ?", (name,))
+            log_transaction('delete', name, quantity, current_qty, 0, price, total_value)
         else:
-            cur.execute('''
-                UPDATE items 
-                SET quantity = %s, updated_at = CURRENT_TIMESTAMP 
-                WHERE name = %s
-            ''', (new_qty, name))
-            log_transaction('remove', name, quantity, current_qty, new_qty)
-        
-        cur.close()
-        return True
+            conn.execute('''UPDATE items SET quantity = ?, updated_at = CURRENT_TIMESTAMP 
+                           WHERE name = ?''', (new_qty, name))
+            log_transaction('remove', name, quantity, current_qty, new_qty, price, total_value)
+    
+    # Invalidate caches
+    cache.invalidate()
+    return True
 
 def update_item_price(name: str, price: float) -> bool:
-    """Update item price - REAL-TIME"""
+    """Update item price with cache invalidation"""
     name = standardize_name(name)
+    if not name:
+        return False
+    
     with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute("UPDATE items SET price = %s, updated_at = CURRENT_TIMESTAMP WHERE name = %s", (price, name))
-        cur.close()
-        return True
+        conn.execute('''UPDATE items SET price = ?, updated_at = CURRENT_TIMESTAMP 
+                       WHERE name = ?''', (price, name))
+    
+    cache.invalidate()
+    return True
 
-# ==================== TRANSACTION HISTORY ====================
-
-def log_transaction(action: str, item_name: str, quantity: int, prev_qty: int = 0, new_qty: int = 0):
+def log_transaction(action: str, item_name: str, quantity: int, prev_qty: int = 0, 
+                    new_qty: int = 0, price: float = 0, total_value: float = 0):
+    """Log every transaction with price and value"""
     try:
-        with get_history_db() as conn:
-            cur = conn.cursor()
-            transaction_id = f"txn_{int(time.time() * 1000000)}_{random.randint(1000, 9999)}"
-            cur.execute('''
-                INSERT INTO transactions (transaction_id, action, item_name, quantity, previous_quantity, new_quantity, timestamp)
-                VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
-            ''', (transaction_id, action, item_name, quantity, prev_qty, new_qty))
-            cur.close()
+        with get_db() as conn:
+            transaction_id = generate_transaction_id()
+            conn.execute('''
+                INSERT INTO transactions (transaction_id, action, item_name, quantity, 
+                                         previous_quantity, new_quantity, price, total_value, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ''', (transaction_id, action, item_name, quantity, prev_qty, new_qty, price, total_value))
     except Exception as e:
         print(f"Error logging transaction: {e}")
 
-def get_transaction_history(limit: int = 50) -> List[Dict[str, Any]]:
-    try:
-        with get_history_db() as conn:
-            cur = conn.cursor(cursor_factory=RealDictCursor)
-            cur.execute("SELECT * FROM transactions ORDER BY timestamp DESC LIMIT %s", (limit,))
-            history = cur.fetchall()
-            cur.close()
-            return [dict(row) for row in history]
-    except Exception as e:
-        print(f"Error getting transactions: {e}")
-        return []
-
-# ==================== STATISTICS ====================
+# ==================== OPTIMIZED QUERIES ====================
 
 def get_summary_stats() -> Dict[str, Any]:
-    items = get_all_items()
-    total_items = len(items)
-    total_quantity = sum(i['quantity'] for i in items)
-    total_value = sum(i['total_value'] for i in items)
+    """Get stats - FAST with caching"""
+    cache_key = 'summary_stats'
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
     
-    return {
-        'total_items': total_items,
-        'total_quantity': total_quantity,
-        'total_value': round(total_value, 2)
-    }
+    with get_db() as conn:
+        stats = conn.execute('''
+            SELECT 
+                COUNT(*) as total_items,
+                COALESCE(SUM(quantity), 0) as total_quantity,
+                COALESCE(SUM(quantity * price), 0) as total_value,
+                COUNT(CASE WHEN quantity <= 5 THEN 1 END) as low_stock_items
+            FROM items
+        ''').fetchone()
+        
+        result = {
+            'total_items': stats[0],
+            'total_quantity': stats[1],
+            'total_value': round(stats[2], 2),
+            'low_stock_items': stats[3]
+        }
+        cache.set(cache_key, result)
+        return result
+
+def get_transaction_history(limit: int = 20) -> List[Dict[str, Any]]:
+    """Get recent transactions with price and value - FAST"""
+    cache_key = f'transactions_{limit}'
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+    
+    with get_db() as conn:
+        transactions = [dict(row) for row in conn.execute('''
+            SELECT id, action, item_name, quantity, price, total_value, timestamp 
+            FROM transactions ORDER BY timestamp DESC LIMIT ?
+        ''', (limit,))]
+        cache.set(cache_key, transactions)
+        return transactions
 
 def get_all_categories() -> List[str]:
+    """Get all categories with caching"""
+    cache_key = 'all_categories'
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+    
     with get_db() as conn:
-        cur = conn.cursor()
-        cur.execute("SELECT DISTINCT category FROM items ORDER BY category")
-        categories = [row[0] for row in cur.fetchall()]
-        cur.close()
+        categories = [row[0] for row in conn.execute("SELECT DISTINCT category FROM items ORDER BY category")]
+        cache.set(cache_key, categories)
         return categories
 
 def search_items(query: str) -> List[Dict[str, Any]]:
+    """Search items - OPTIMIZED with FTS-like pattern"""
+    if not query or len(query) < 2:
+        return get_all_items()
+    
     with get_db() as conn:
-        cur = conn.cursor(cursor_factory=RealDictCursor)
-        cur.execute("SELECT * FROM items WHERE name LIKE %s ORDER BY name", (f'%{query}%',))
-        items = cur.fetchall()
-        cur.close()
-        
-        result = []
-        for item in items:
-            item_dict = dict(item)
-            item_dict['total_value'] = item_dict['quantity'] * item_dict.get('price', 0)
-            result.append(item_dict)
-        return result
+        items = []
+        for row in conn.execute('''SELECT * FROM items WHERE name LIKE ? ORDER BY 
+                                  CASE WHEN name = ? THEN 1 
+                                       WHEN name LIKE ? THEN 2 
+                                       ELSE 3 END''', 
+                               (f'%{query}%', query, f'{query}%')):
+            items.append(dict(row))
+        return items
 
-# ==================== EXPORT FUNCTIONS (FIXED FOR RENDER) ====================
+def get_low_stock_items(threshold: int = 5) -> List[Dict[str, Any]]:
+    """Get low stock items - OPTIMIZED"""
+    cache_key = f'low_stock_{threshold}'
+    cached = cache.get(cache_key)
+    if cached is not None:
+        return cached
+    
+    with get_db() as conn:
+        items = [dict(row) for row in conn.execute('''
+            SELECT * FROM items WHERE quantity <= ? ORDER BY quantity ASC
+        ''', (threshold,))]
+        cache.set(cache_key, items)
+        return items
 
-def export_inventory_to_json() -> str:
-    """Export inventory to JSON string (not file)"""
+def get_top_items(limit: int = 10) -> List[Dict[str, Any]]:
+    """Get top items by value"""
+    with get_db() as conn:
+        return [dict(row) for row in conn.execute('''
+            SELECT * FROM items ORDER BY (quantity * price) DESC LIMIT ?
+        ''', (limit,))]
+
+def get_recent_activity(days: int = 7) -> List[Dict[str, Any]]:
+    """Get recent activity summary"""
+    with get_db() as conn:
+        return [dict(row) for row in conn.execute('''
+            SELECT date(timestamp) as date, 
+                   COUNT(*) as total_actions,
+                   SUM(CASE WHEN action = 'add' THEN quantity ELSE 0 END) as items_added,
+                   SUM(CASE WHEN action = 'remove' THEN quantity ELSE 0 END) as items_removed
+            FROM transactions 
+            WHERE timestamp >= date('now', ?)
+            GROUP BY date(timestamp)
+            ORDER BY date DESC
+        ''', (f'-{days} days',))]
+
+# ==================== BULK OPERATIONS ====================
+
+def bulk_add_items(items: List[Tuple]) -> int:
+    """Bulk add items - VERY FAST"""
+    if not items:
+        return 0
+    
+    with get_db() as conn:
+        conn.executemany('''INSERT OR REPLACE INTO items (name, quantity, category, unit, price, updated_at) 
+                           VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)''', items)
+        cache.invalidate()
+        return len(items)
+
+def bulk_remove_items(names: List[str]) -> int:
+    """Bulk remove items - VERY FAST"""
+    if not names:
+        return 0
+    
+    placeholders = ','.join(['?' for _ in names])
+    with get_db() as conn:
+        conn.execute(f"DELETE FROM items WHERE name IN ({placeholders})", names)
+        cache.invalidate()
+        return len(names)
+
+# ==================== EXPORT FUNCTIONS ====================
+
+def export_inventory_to_json(filepath: str = None) -> str:
+    """Export inventory to JSON"""
     items = get_all_items()
     data = {
         'export_date': datetime.now().isoformat(),
         'total_items': len(items),
         'total_quantity': sum(i['quantity'] for i in items),
-        'total_value': sum(i['total_value'] for i in items),
+        'total_value': get_summary_stats()['total_value'],
         'inventory': items
     }
-    return json.dumps(data, indent=2, default=str, ensure_ascii=False)
+    
+    if not filepath:
+        filepath = os.path.join(os.path.dirname(DB_PATH), f'inventory_export_{datetime.now().strftime("%Y%m%d_%H%M%S")}.json')
+    
+    with open(filepath, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=2, default=str, ensure_ascii=False)
+    
+    return filepath
 
-def export_inventory_to_csv() -> str:
-    """Export inventory to CSV string (not file)"""
+def export_inventory_to_csv(filepath: str = None) -> str:
+    """Export inventory to CSV"""
+    import csv
     items = get_all_items()
-    output = StringIO()
-    writer = csv.writer(output)
-    writer.writerow(['Name', 'Quantity', 'Unit', 'Category', 'Price (₹)', 'Total Value (₹)'])
     
-    for item in items:
-        writer.writerow([
-            item['name'], item['quantity'], item.get('unit', 'piece'),
-            item.get('category', 'general'), item.get('price', 0),
-            item['total_value']
-        ])
+    if not filepath:
+        filepath = os.path.join(os.path.dirname(DB_PATH), f'inventory_export_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv')
     
-    return output.getvalue()
+    with open(filepath, 'w', newline='', encoding='utf-8') as f:
+        writer = csv.DictWriter(f, fieldnames=['name', 'quantity', 'category', 'unit', 'price', 'total_value'])
+        writer.writeheader()
+        for item in items:
+            writer.writerow({
+                'name': item['name'],
+                'quantity': item['quantity'],
+                'category': item.get('category', 'general'),
+                'unit': item.get('unit', 'piece'),
+                'price': item.get('price', 0),
+                'total_value': item['quantity'] * item.get('price', 0)
+            })
+    
+    return filepath
 
-def export_inventory_to_txt() -> str:
-    """Export inventory to TXT string (not file)"""
+def export_inventory_to_txt(filepath: str = None) -> str:
+    """Export inventory to formatted text"""
     items = get_all_items()
-    output = []
-    output.append("=" * 60)
-    output.append("SPEAK SNAP STORE - INVENTORY REPORT")
-    output.append(f"Export Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    output.append("=" * 60)
-    output.append("")
+    stats = get_summary_stats()
     
-    for item in items:
-        output.append(f"📦 {item['name'].upper()}")
-        output.append(f"   Quantity: {item['quantity']} {item.get('unit', 'piece')}(s)")
-        output.append(f"   Price: ₹{item.get('price', 0):.2f}")
-        output.append(f"   Total Value: ₹{item['total_value']:.2f}")
-        output.append(f"   Category: {item.get('category', 'general')}")
-        output.append("-" * 40)
+    if not filepath:
+        filepath = os.path.join(os.path.dirname(DB_PATH), f'inventory_export_{datetime.now().strftime("%Y%m%d_%H%M%S")}.txt')
     
-    output.append("")
-    output.append("=" * 60)
-    output.append("SUMMARY")
-    output.append(f"Total Items: {len(items)}")
-    output.append(f"Total Quantity: {sum(i['quantity'] for i in items)}")
-    output.append(f"Total Inventory Value: ₹{sum(i['total_value'] for i in items):.2f}")
-    output.append("=" * 60)
+    with open(filepath, 'w', encoding='utf-8') as f:
+        f.write("=" * 60 + "\n")
+        f.write("SPEAK SNAP STORE - INVENTORY REPORT\n")
+        f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write("=" * 60 + "\n\n")
+        
+        f.write("SUMMARY STATISTICS\n")
+        f.write("-" * 40 + "\n")
+        f.write(f"Total Items: {stats['total_items']}\n")
+        f.write(f"Total Units: {stats['total_quantity']}\n")
+        f.write(f"Total Value: ₹{stats['total_value']:.2f}\n")
+        f.write(f"Low Stock Items: {stats['low_stock_items']}\n\n")
+        
+        f.write("INVENTORY DETAILS\n")
+        f.write("-" * 40 + "\n")
+        for item in items:
+            f.write(f"\n📦 {item['name'].upper()}\n")
+            f.write(f"   Quantity: {item['quantity']} {item.get('unit', 'piece')}(s)\n")
+            f.write(f"   Price: ₹{item.get('price', 0):.2f} per unit\n")
+            f.write(f"   Total Value: ₹{item['quantity'] * item.get('price', 0):.2f}\n")
+            f.write(f"   Category: {item.get('category', 'general')}\n")
+        
+        f.write("\n" + "=" * 60 + "\n")
+        f.write("END OF REPORT\n")
+        f.write("=" * 60 + "\n")
     
-    return '\n'.join(output)
+    return filepath
+
+# ==================== HEALTH CHECK ====================
+
+def get_db_health() -> Dict[str, Any]:
+    """Get database health metrics"""
+    with get_db() as conn:
+        # Get database size
+        db_size = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0
+        
+        # Get table stats
+        item_count = conn.execute("SELECT COUNT(*) FROM items").fetchone()[0]
+        transaction_count = conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
+        
+        return {
+            'status': 'healthy',
+            'db_size_mb': round(db_size / (1024 * 1024), 2),
+            'item_count': item_count,
+            'transaction_count': transaction_count,
+            'cache_size': len(cache.cache),
+            'connection_pool_size': pool.max_connections
+        }
 
 # ==================== INITIALIZE ====================
 init_db()
-init_history_db()
 
 print("=" * 50)
-print("🐘 POSTGRESQL REAL-TIME DATABASE ACTIVE")
+print("⚡ ULTRA-FAST REAL-TIME DATABASE ACTIVE")
 print("=" * 50)
-print("✅ Dynamic add/remove ready")
-print("✅ Price/Value system active")
-print("✅ Export ready (JSON/CSV/TXT)")
+print(f"📁 Database: {DB_PATH}")
+print(f"💾 Cache Size: {CACHE_SIZE} items, TTL: {CACHE_TTL}s")
+print(f"🔌 Connection Pool: {pool.max_connections} connections")
+print("💰 Dynamic Pricing Active")
+print("📜 Enhanced Transaction Logging with Price/Value")
+print("✅ Instant add/remove ready")
+print("✅ Async operations ready")
 print("=" * 50)
