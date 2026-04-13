@@ -8,7 +8,7 @@ import FeedbackMessage from './components/FeedbackMessage'
 import Dashboard from './components/Dashboard'
 import './App.css'
 
-const API_BASE  = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const API_BASE  =  'https://speak-snap-backend.onrender.com'
 
 function App() {
   const [activeTab, setActiveTab] = useState('dashboard')

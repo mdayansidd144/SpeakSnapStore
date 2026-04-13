@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo } from 'react'
-const API_BASE = 'http://localhost:8000'
+const API_BASE = 'https://speak-snap-backend.onrender.com'
 export default function InventoryList({ inventory, onFeedback, onSuccess }) {
   const [searchTerm, setSearchTerm] = useState('')
   const [removingItem, setRemovingItem] = useState(null)
@@ -9,21 +9,18 @@ export default function InventoryList({ inventory, onFeedback, onSuccess }) {
     if (!searchTerm.trim()) return inventory
     return inventory.filter(item => item.name.toLowerCase().includes(searchTerm.toLowerCase()))
   }, [inventory, searchTerm])
-
   const totalValue = useMemo(() => {
     return inventory.reduce((sum, item) => sum + (item.total_value || 0), 0)
   }, [inventory])
-
   const handleRemove = useCallback(async (itemName, currentQuantity) => {
     const qty = prompt(`Remove quantity from ${itemName}\nAvailable: ${currentQuantity}`, "1")
     if (!qty) return
-    
+  
     const quantity = parseInt(qty)
     if (isNaN(quantity) || quantity <= 0 || quantity > currentQuantity) {
       onFeedback('❌ Invalid quantity')
       return
     }
-    
     setRemovingItem(itemName)
     setLoading(true)
     
