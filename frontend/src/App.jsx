@@ -1,268 +1,12 @@
-// import { useState, useEffect, useCallback } from 'react'
-// import VoiceAssistant from './components/VoiceAssistant'
-// import CameraDetector from './components/CameraDetector'
-// import InventoryList from './components/InventoryList'
-// import FeedbackMessage from './components/FeedbackMessage'
-// import Dashboard from './components/Dashboard'
-// import './App.css'
-
-// const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
-
-// function App() {
-//   const [activeTab, setActiveTab] = useState('dashboard')
-//   const [inventory, setInventory] = useState([])
-//   const [feedback, setFeedback] = useState('')
-//   const [stats, setStats] = useState(null)
-//   const [loading, setLoading] = useState(false)
-//   const [error, setError] = useState(null)
-
-//   const refreshInventory = useCallback(async () => {
-//     try {
-//       setLoading(true)
-//       const res = await fetch(`${API_BASE}/api/inventory/`)
-      
-//       if (!res.ok) {
-//         throw new Error(`HTTP ${res.status}: ${res.statusText}`)
-//       }
-      
-//       const data = await res.json()
-//       setInventory(Array.isArray(data) ? data : [])
-//       setError(null)
-//     } catch (error) {
-//       console.error('Failed to fetch inventory:', error)
-//       setError(error.message)
-//       setInventory([])
-//     } finally {
-//       setLoading(false)
-//     }
-//   }, [])
-
-//   const refreshStats = useCallback(async () => {
-//     try {
-//       const res = await fetch(`${API_BASE}/api/inventory/stats`)
-      
-//       if (!res.ok) {
-//         throw new Error(`HTTP ${res.status}: ${res.statusText}`)
-//       }
-      
-//       const data = await res.json()
-//       setStats(data)
-//     } catch (error) {
-//       console.error('Failed to fetch stats:', error)
-//       setStats({ 
-//         total_items: 0, 
-//         total_quantity: 0, 
-//         total_value: 0, 
-//         low_stock_items: 0 
-//       })
-//     }
-//   }, [])
-
-//   useEffect(() => {
-//     refreshInventory()
-//     refreshStats()
-//   }, [refreshInventory, refreshStats])
-
-//   const handleTabChange = (tab) => {
-//     setActiveTab(tab)
-//     setFeedback(`Switched to ${tab} mode`)
-//   }
-
-//   // Dynamic background based on active tab
-//   const getAppClass = () => {
-//     switch(activeTab) {
-//       case 'dashboard': return 'app dashboard'
-//       case 'voice': return 'app voice'
-//       case 'camera': return 'app camera'
-//       default: return 'app'
-//     }
-//   }
-
-//   return (
-//     <div className={getAppClass()}>
-//       <header>
-//         <div className="logo-section">
-//           <h1>🎙️ Speak Snap Store</h1>
-//           <p>Voice • Vision • Intelligence • Real-time Inventory</p>
-//         </div>
-//         {loading && (
-//           <div className="loading-indicator">
-//             <span className="spinner"></span>
-//             <span>Syncing...</span>
-//           </div>
-//         )}
-//       </header>
-
-//       <div className="tabs">
-//         <button 
-//           className={activeTab === 'dashboard' ? 'active' : ''} 
-//           onClick={() => handleTabChange('dashboard')}
-//         >
-//           <span className="tab-icon">📊</span>
-//           <span className="tab-label">Dashboard</span>
-//         </button>
-//         <button 
-//           className={activeTab === 'voice' ? 'active' : ''} 
-//           onClick={() => handleTabChange('voice')}
-//         >
-//           <span className="tab-icon">🎤</span>
-//           <span className="tab-label">Voice</span>
-//         </button>
-//         <button 
-//           className={activeTab === 'camera' ? 'active' : ''} 
-//           onClick={() => handleTabChange('camera')}
-//         >
-//           <span className="tab-icon">📸</span>
-//           <span className="tab-label">Camera</span>
-//         </button>
-//       </div>
-
-//       <div className="main-content">
-//         {error && (
-//           <div className="error-banner">
-//             <span>⚠️</span>
-//             <span>Connection error: {error}</span>
-//             <button onClick={() => { refreshInventory(); refreshStats(); }}>Retry</button>
-//           </div>
-//         )}
-        
-//         {activeTab === 'dashboard' && (
-//           <Dashboard 
-//             stats={stats} 
-//             inventory={inventory} 
-//             onRefresh={refreshInventory} 
-//             onFeedback={setFeedback} 
-//           />
-//         )}
-//         {activeTab === 'voice' && (
-//           <VoiceAssistant 
-//             onFeedback={setFeedback} 
-//             onSuccess={() => { 
-//               refreshInventory(); 
-//               refreshStats(); 
-//             }} 
-//           />
-//         )}
-//         {activeTab === 'camera' && (
-//           <CameraDetector 
-//             onFeedback={setFeedback} 
-//             onSuccess={() => { 
-//               refreshInventory(); 
-//               refreshStats(); 
-//             }} 
-//           />
-//         )}
-//       </div>
-
-//       <InventoryList 
-//         inventory={inventory} 
-//         onFeedback={setFeedback}
-//         onSuccess={() => { 
-//           refreshInventory(); 
-//           refreshStats(); 
-//         }}
-//       />
-//       <FeedbackMessage message={feedback} />
-      
-//       <style>{`
-//         .logo-section {
-//           text-align: center;
-//         }
-        
-//         .loading-indicator {
-//           position: absolute;
-//           top: 20px;
-//           right: 20px;
-//           display: flex;
-//           align-items: center;
-//           gap: 8px;
-//           background: rgba(255, 255, 255, 0.9);
-//           padding: 6px 12px;
-//           border-radius: 30px;
-//           font-size: 12px;
-//           color: #667eea;
-//         }
-        
-//         .spinner {
-//           width: 16px;
-//           height: 16px;
-//           border: 2px solid #e0e0e0;
-//           border-top-color: #667eea;
-//           border-radius: 50%;
-//           animation: spin 0.8s linear infinite;
-//         }
-        
-//         @keyframes spin {
-//           to { transform: rotate(360deg); }
-//         }
-        
-//         .error-banner {
-//           background: linear-gradient(135deg, #ffebee 0%, #ffcdd2 100%);
-//           border-left: 4px solid #f44336;
-//           padding: 12px 16px;
-//           border-radius: 12px;
-//           margin-bottom: 20px;
-//           display: flex;
-//           align-items: center;
-//           gap: 12px;
-//           font-size: 13px;
-//           color: #c62828;
-//         }
-        
-//         .error-banner button {
-//           margin-left: auto;
-//           background: #f44336;
-//           color: white;
-//           border: none;
-//           padding: 4px 12px;
-//           border-radius: 20px;
-//           cursor: pointer;
-//           font-size: 12px;
-//           transition: all 0.2s;
-//         }
-        
-//         .error-banner button:hover {
-//           background: #d32f2f;
-//           transform: scale(1.02);
-//         }
-        
-//         .tab-icon {
-//           font-size: 1.1rem;
-//         }
-        
-//         .tab-label {
-//           margin-left: 6px;
-//         }
-        
-//         @media (max-width: 640px) {
-//           .tab-label {
-//             display: none;
-//           }
-//           .tab-icon {
-//             font-size: 1.3rem;
-//           }
-//           .loading-indicator {
-//             top: 10px;
-//             right: 10px;
-//             padding: 4px 8px;
-//             font-size: 10px;
-//           }
-//         }
-//       `}</style>
-//     </div>
-//   )
-// }
-
-// export default App
 import { useState, useEffect, useCallback } from 'react'
 import VoiceAssistant from './components/VoiceAssistant'
 import CameraDetector from './components/CameraDetector'
 import InventoryList from './components/InventoryList'
 import FeedbackMessage from './components/FeedbackMessage'
 import Dashboard from './components/Dashboard'
-import './App.css'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const API_BASE =
+  import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
 function App() {
   const [activeTab, setActiveTab] = useState('dashboard')
@@ -272,21 +16,50 @@ function App() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
+  useEffect(() => {
+    document.body.style.margin = '0'
+    document.body.style.background = '#C7E2F2'
+    document.body.style.fontFamily =
+      'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif'
+
+    return () => {
+      document.body.style.margin = ''
+      document.body.style.background = ''
+      document.body.style.fontFamily = ''
+    }
+  }, [])
+
   const refreshInventory = useCallback(async () => {
     try {
       setLoading(true)
-      const res = await fetch(`${API_BASE}/api/inventory/`)
-      
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+
+      const response = await fetch(
+        `${API_BASE}/api/inventory/`
+      )
+
+      if (!response.ok) {
+        throw new Error(
+          `HTTP ${response.status}: ${response.statusText}`
+        )
       }
-      
-      const data = await res.json()
-      setInventory(Array.isArray(data) ? data : [])
+
+      const data = await response.json()
+
+      setInventory(
+        Array.isArray(data) ? data : []
+      )
+
       setError(null)
-    } catch (error) {
-      console.error('Failed to fetch inventory:', error)
-      setError(error.message)
+    } catch (err) {
+      console.error(
+        'Failed to fetch inventory:',
+        err
+      )
+
+      setError(
+        err.message || 'Unable to connect to the backend.'
+      )
+
       setInventory([])
     } finally {
       setLoading(false)
@@ -295,137 +68,307 @@ function App() {
 
   const refreshStats = useCallback(async () => {
     try {
-      const res = await fetch(`${API_BASE}/api/inventory/stats`)
-      
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}: ${res.statusText}`)
+      const response = await fetch(
+        `${API_BASE}/api/inventory/stats`
+      )
+
+      if (!response.ok) {
+        throw new Error(
+          `HTTP ${response.status}: ${response.statusText}`
+        )
       }
-      
-      const data = await res.json()
+
+      const data = await response.json()
+
       setStats(data)
-    } catch (error) {
-      console.error('Failed to fetch stats:', error)
-      setStats({ 
-        total_items: 0, 
-        total_quantity: 0, 
-        total_value: 0, 
-        low_stock_items: 0 
+    } catch (err) {
+      console.error(
+        'Failed to fetch statistics:',
+        err
+      )
+
+      setStats({
+        total_items: 0,
+        total_quantity: 0,
+        total_value: 0,
+        low_stock_items: 0
       })
     }
   }, [])
 
+  const refreshAll = useCallback(async () => {
+    await Promise.all([
+      refreshInventory(),
+      refreshStats()
+    ])
+  }, [
+    refreshInventory,
+    refreshStats
+  ])
+
   useEffect(() => {
-    refreshInventory()
-    refreshStats()
-  }, [refreshInventory, refreshStats])
+    refreshAll()
+  }, [refreshAll])
 
   const handleTabChange = (tab) => {
     setActiveTab(tab)
-    setFeedback(`Switched to ${tab} mode`)
+    setFeedback('')
   }
 
-  const getAppClass = () => {
-    switch(activeTab) {
-      case 'dashboard': return 'app dashboard'
-      case 'voice': return 'app voice'
-      case 'camera': return 'app camera'
-      default: return 'app'
-    }
+  const handleSuccess = async () => {
+    await refreshAll()
   }
+
+  const renderContent = () => {
+    if (activeTab === 'dashboard') {
+      return (
+        <Dashboard
+          stats={stats}
+          inventory={inventory}
+          onRefresh={refreshInventory}
+          onFeedback={setFeedback}
+        />
+      )
+    }
+
+    if (activeTab === 'voice') {
+      return (
+        <VoiceAssistant
+          onFeedback={setFeedback}
+          onSuccess={handleSuccess}
+        />
+      )
+    }
+
+    if (activeTab === 'camera') {
+      return (
+        <CameraDetector
+          onFeedback={setFeedback}
+          onSuccess={handleSuccess}
+        />
+      )
+    }
+
+    return null
+  }
+
+  const navButtonStyle = (tab) => ({
+    flex: 1,
+    minWidth: '120px',
+    height: '42px',
+    border:
+      activeTab === tab
+        ? '1px solid #005A9E'
+        : '1px solid #C5DDEB',
+    borderRadius: '8px',
+    background:
+      activeTab === tab
+        ? '#005A9E'
+        : '#FFFFFF',
+    color:
+      activeTab === tab
+        ? '#FFFFFF'
+        : '#12344A',
+    fontFamily: 'inherit',
+    fontSize: '13px',
+    fontWeight: 600,
+    cursor: 'pointer',
+    transition: 'background 0.15s ease'
+  })
 
   return (
-    <div className={getAppClass()}>
-      <header>
-  <div className="logo-section">
-    <h1 className="ocean-flashcard-title">
-      <span className="ocean-word">🎙️ Speak</span>
-      <span className="ocean-word">Snap</span>
-      <span className="ocean-word">Stock</span>
-    </h1>
-    <div className="tagline-flashcard">
-      <span className="tagline-word">Voice</span>
-      <span className="tagline-word">Vision</span>
-      <span className="tagline-word">Intelligence</span>
-      <span className="tagline-word ocean-highlight">Real-time Inventory</span>
-    </div>
-  </div>
-  {loading && (
-    <div className="loading-indicator">
-      <span className="spinner"></span>
-      <span>Syncing...</span>
-    </div>
-  )}
-</header>
+    <div
+      style={{
+        minHeight: '100vh',
+        background: '#C7E2F2',
+        color: '#12344A'
+      }}
+    >
+      <header
+        style={{
+          background: '#E7F3FB',
+          borderBottom: '1px solid #B8D5E5'
+        }}
+      >
+        <div
+          style={{
+            width: 'min(1180px, calc(100% - 32px))',
+            margin: '0 auto',
+            padding: '24px 0 20px',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: '20px',
+            flexWrap: 'wrap'
+          }}
+        >
+          <div>
+            <h1
+              style={{
+                margin: 0,
+                color: '#004578',
+                fontSize: '27px',
+                lineHeight: 1.15,
+                fontWeight: 750,
+                letterSpacing: '-0.5px'
+              }}
+            >
+              Speak Snap Store
+            </h1>
 
-      <div className="tabs">
-        <button 
-          className={activeTab === 'dashboard' ? 'active' : ''} 
-          onClick={() => handleTabChange('dashboard')}
-        >
-          <span className="tab-icon">📊</span>
-          <span className="tab-label">Dashboard</span>
-        </button>
-        <button 
-          className={activeTab === 'voice' ? 'active' : ''} 
-          onClick={() => handleTabChange('voice')}
-        >
-          <span className="tab-icon">🎤</span>
-          <span className="tab-label">Voice</span>
-        </button>
-        <button 
-          className={activeTab === 'camera' ? 'active' : ''} 
-          onClick={() => handleTabChange('camera')}
-        >
-          <span className="tab-icon">📸</span>
-          <span className="tab-label">Camera</span>
-        </button>
-      </div>
+            <p
+              style={{
+                margin: '7px 0 0',
+                color: '#47687D',
+                fontSize: '13px',
+                lineHeight: 1.5
+              }}
+            >
+              Voice, vision and intelligent inventory management
+            </p>
+          </div>
 
-      <div className="main-content">
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              padding: '8px 12px',
+              background: '#FFFFFF',
+              border: '1px solid #C5DDEB',
+              borderRadius: '8px',
+              color: '#365E74',
+              fontSize: '12px',
+              fontWeight: 600
+            }}
+          >
+            <span
+              style={{
+                width: '7px',
+                height: '7px',
+                borderRadius: '50%',
+                background: loading
+                  ? '#D97706'
+                  : '#16803C'
+              }}
+            />
+
+            {loading
+              ? 'Syncing'
+              : 'System ready'}
+          </div>
+        </div>
+      </header>
+
+      <main
+        style={{
+          width: 'min(1180px, calc(100% - 32px))',
+          margin: '0 auto',
+          padding: '18px 0 40px'
+        }}
+      >
+        <nav
+          style={{
+            display: 'flex',
+            gap: '8px',
+            padding: '6px',
+            marginBottom: '22px',
+            background: '#E7F3FB',
+            border: '1px solid #B8D5E5',
+            borderRadius: '10px'
+          }}
+        >
+          <button
+            type="button"
+            onClick={() =>
+              handleTabChange('dashboard')
+            }
+            style={navButtonStyle('dashboard')}
+          >
+            Dashboard
+          </button>
+
+          <button
+            type="button"
+            onClick={() =>
+              handleTabChange('voice')
+            }
+            style={navButtonStyle('voice')}
+          >
+            Voice Assistant
+          </button>
+
+          <button
+            type="button"
+            onClick={() =>
+              handleTabChange('camera')
+            }
+            style={navButtonStyle('camera')}
+          >
+            Camera Detection
+          </button>
+        </nav>
+
         {error && (
-          <div className="error-banner">
-            <span>⚠️</span>
-            <span>Connection error: {error}</span>
-            <button onClick={() => { refreshInventory(); refreshStats(); }}>Retry</button>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '14px',
+              padding: '13px 16px',
+              marginBottom: '20px',
+              background: '#FFF4F2',
+              border: '1px solid #F0B8B0',
+              borderLeft: '4px solid #C24135',
+              borderRadius: '8px',
+              color: '#8B2E26',
+              fontSize: '13px'
+            }}
+          >
+            <span>
+              Connection error: {error}
+            </span>
+
+            <button
+              type="button"
+              onClick={refreshAll}
+              disabled={loading}
+              style={{
+                height: '34px',
+                padding: '0 13px',
+                border: '1px solid #C24135',
+                borderRadius: '6px',
+                background: '#FFFFFF',
+                color: '#8B2E26',
+                fontFamily: 'inherit',
+                fontSize: '12px',
+                fontWeight: 600,
+                cursor: loading
+                  ? 'not-allowed'
+                  : 'pointer'
+              }}
+            >
+              Retry
+            </button>
           </div>
         )}
-        
-        {activeTab === 'dashboard' && (
-          <Dashboard 
-            stats={stats} 
-            inventory={inventory} 
-            onRefresh={refreshInventory} 
-            onFeedback={setFeedback} 
-          />
-        )}
-        {activeTab === 'voice' && (
-          <VoiceAssistant 
-            onFeedback={setFeedback} 
-            onSuccess={() => { 
-              refreshInventory(); 
-              refreshStats(); 
-            }} 
-          />
-        )}
-        {activeTab === 'camera' && (
-          <CameraDetector 
-            onFeedback={setFeedback} 
-            onSuccess={() => { 
-              refreshInventory(); 
-              refreshStats(); 
-            }} 
-          />
-        )}
-      </div>
 
-      <InventoryList 
-        inventory={inventory} 
-        onFeedback={setFeedback}
-        onSuccess={() => { 
-          refreshInventory(); 
-          refreshStats(); 
-        }}
-      />
+        {renderContent()}
+
+        <section
+          style={{
+            marginTop: '22px'
+          }}
+        >
+          <InventoryList
+            inventory={inventory}
+            onFeedback={setFeedback}
+            onSuccess={handleSuccess}
+          />
+        </section>
+      </main>
+
       <FeedbackMessage message={feedback} />
     </div>
   )

@@ -1,306 +1,721 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks, status
-from fastapi.responses import JSONResponse
-from typing import Optional, List
+from fastapi import (
+    APIRouter,
+    UploadFile,
+    File,
+    HTTPException,
+    BackgroundTasks,
+    status,
+)
+from typing import Optional, List, Dict, Any
 import tempfile
 import os
 import asyncio
 import base64
-import wave
-import struct
-import numpy as np
-from concurrent.futures import ThreadPoolExecutor
+import binascii
 from datetime import datetime
 import logging
+
 from ai_models.whisper_client import whisper
+
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-# Thread pool for CPU-intensive operations
-executor = ThreadPoolExecutor(max_workers=2)
 
-# Supported audio formats
-SUPPORTED_FORMATS = ['.webm', '.mp3', '.wav', '.m4a', '.ogg', '.flac']
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+SUPPORTED_FORMATS = [
+    ".webm",
+    ".mp3",
+    ".wav",
+    ".m4a",
+    ".ogg",
+    ".flac",
+]
+
 MAX_FILE_SIZE = 25 * 1024 * 1024  # 25 MB
+MAX_BATCH_FILES = 10
+DEFAULT_BASE64_FORMAT = "webm"
 
-# ==================== HELPER FUNCTIONS ====================
+
+# ============================================================
+# HELPER FUNCTIONS
+# ============================================================
 
 async def transcribe_audio_async(audio_path: str) -> str:
-    """Transcribe audio asynchronously"""
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
-        executor,
-        whisper.transcribe,
-        audio_path
-    )
+    """
+    Run the synchronous Whisper transcription function in a
+    worker thread so the FastAPI event loop is not blocked.
+    """
 
-def validate_audio_format(filename: str) -> bool:
-    """Check if audio format is supported"""
-    ext = os.path.splitext(filename)[1].lower()
-    return ext in SUPPORTED_FORMATS
-
-def get_audio_duration(file_path: str) -> float:
-    """Get audio duration in seconds (for WAV files)"""
-    try:
-        if file_path.endswith('.wav'):
-            with wave.open(file_path, 'rb') as wav:
-                frames = wav.getnframes()
-                rate = wav.getframerate()
-                return frames / float(rate)
-    except Exception:
-        pass
-    return 0.0
-
-def decode_base64_audio(base64_str: str) -> bytes:
-    """Decode base64 audio to bytes"""
-    try:
-        if ',' in base64_str:
-            base64_str = base64_str.split(',')[1]
-        return base64.b64decode(base64_str)
-    except Exception as e:
-        logger.error(f"Base64 decode error: {e}")
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid base64 audio data"
+    if whisper is None:
+        raise RuntimeError(
+            "Whisper service is not available"
         )
 
-# ==================== MAIN TRANSCRIPTION ENDPOINTS ====================
+    return await asyncio.to_thread(
+        whisper.transcribe,
+        audio_path,
+    )
+
+
+def validate_audio_format(filename: Optional[str]) -> bool:
+    """
+    Check whether the uploaded filename has a supported
+    audio extension.
+    """
+
+    if not filename:
+        return False
+
+    filename = os.path.basename(filename)
+
+    _, extension = os.path.splitext(filename)
+
+    return extension.lower() in SUPPORTED_FORMATS
+
+
+def get_audio_extension(filename: Optional[str]) -> str:
+    """Return a normalized audio extension."""
+
+    if not filename:
+        return ""
+
+    filename = os.path.basename(filename)
+
+    _, extension = os.path.splitext(filename)
+
+    return extension.lower()
+
+
+def get_audio_duration(file_path: str) -> float:
+    """
+    Get audio duration.
+
+    WAV files can be read directly using Python's wave module.
+    Other formats are handled by Whisper/ffmpeg internally.
+    """
+
+    if not file_path:
+        return 0.0
+
+    try:
+        if file_path.lower().endswith(".wav"):
+            import wave
+
+            with wave.open(file_path, "rb") as wav_file:
+                frames = wav_file.getnframes()
+                rate = wav_file.getframerate()
+
+                if rate <= 0:
+                    return 0.0
+
+                return frames / float(rate)
+
+    except Exception as exc:
+        logger.debug(
+            "Could not determine audio duration: %s",
+            exc,
+        )
+
+    return 0.0
+
+
+def decode_base64_audio(base64_str: str) -> bytes:
+    """
+    Decode Base64 audio safely.
+
+    Supports both:
+        raw Base64
+    and:
+        data:audio/webm;base64,...
+    """
+
+    if not isinstance(base64_str, str):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Audio data must be a Base64 string",
+        )
+
+    base64_str = base64_str.strip()
+
+    if not base64_str:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Empty Base64 audio data",
+        )
+
+    # --------------------------------------------------------
+    # Remove data URI prefix if present.
+    # --------------------------------------------------------
+    if "," in base64_str:
+        prefix, encoded_data = base64_str.split(",", 1)
+
+        if not prefix.lower().startswith("data:"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid Base64 audio data",
+            )
+
+        base64_str = encoded_data
+
+    try:
+        # validate=True ensures invalid Base64 characters
+        # are rejected.
+        audio_bytes = base64.b64decode(
+            base64_str,
+            validate=True,
+        )
+
+    except (binascii.Error, ValueError, TypeError) as exc:
+        logger.warning(
+            "Invalid Base64 audio: %s",
+            exc,
+        )
+
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid Base64 audio data",
+        )
+
+    if not audio_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Decoded audio is empty",
+        )
+
+    if len(audio_bytes) > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=(
+                "Audio file too large. Maximum size: "
+                f"{MAX_FILE_SIZE // (1024 * 1024)} MB"
+            ),
+        )
+
+    return audio_bytes
+
+
+def validate_base64_format(format_type: str) -> str:
+    """
+    Validate and normalize a Base64 audio format.
+    """
+
+    if not format_type:
+        format_type = DEFAULT_BASE64_FORMAT
+
+    format_type = str(format_type).strip().lower()
+
+    # Allow callers to send ".webm" as well as "webm".
+    if format_type.startswith("."):
+        format_type = format_type[1:]
+
+    extension = f".{format_type}"
+
+    if extension not in SUPPORTED_FORMATS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Unsupported audio format. Supported: "
+                f"{', '.join(SUPPORTED_FORMATS)}"
+            ),
+        )
+
+    return format_type
+
+
+def create_temp_audio_file(
+    content: bytes,
+    suffix: str,
+) -> str:
+    """
+    Create a temporary audio file and return its path.
+    """
+
+    if not content:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Empty audio file",
+        )
+
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=(
+                "File too large. Maximum size: "
+                f"{MAX_FILE_SIZE // (1024 * 1024)} MB"
+            ),
+        )
+
+    with tempfile.NamedTemporaryFile(
+        suffix=suffix,
+        delete=False,
+    ) as temp_file:
+        temp_file.write(content)
+        return temp_file.name
+
+
+def remove_temp_file(file_path: Optional[str]) -> None:
+    """Safely remove a temporary file."""
+
+    if not file_path:
+        return
+
+    try:
+        if os.path.exists(file_path):
+            os.unlink(file_path)
+    except OSError as exc:
+        logger.warning(
+            "Could not remove temporary file '%s': %s",
+            file_path,
+            exc,
+        )
+
+
+# ============================================================
+# MAIN TRANSCRIPTION ENDPOINT
+# ============================================================
 
 @router.post("/transcribe")
 async def transcribe_audio(
     audio: UploadFile = File(...),
     background_tasks: BackgroundTasks = None,
-    language: Optional[str] = "en"
+    language: Optional[str] = "en",
 ):
-    """Transcribe audio file to text"""
-    
-    # Validate file type
-    if not validate_audio_format(audio.filename):
+    """
+    Transcribe an uploaded audio file to text.
+    """
+
+    filename = audio.filename or ""
+
+    # --------------------------------------------------------
+    # Validate format.
+    # --------------------------------------------------------
+    if not validate_audio_format(filename):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported audio format. Supported: {', '.join(SUPPORTED_FORMATS)}"
+            detail=(
+                "Unsupported audio format. Supported: "
+                f"{', '.join(SUPPORTED_FORMATS)}"
+            ),
         )
-    
-    # Read audio content
-    content = await audio.read()
-    
-    if len(content) == 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Empty audio file"
-        )
-    
-    if len(content) > MAX_FILE_SIZE:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"File too large. Maximum size: {MAX_FILE_SIZE // (1024*1024)} MB"
-        )
-    
-    # Save to temp file
-    suffix = os.path.splitext(audio.filename)[1].lower()
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(content)
-        tmp_path = tmp.name
-    
+
+    suffix = get_audio_extension(filename)
+
+    tmp_path: Optional[str] = None
+
     try:
-        # Get audio duration
+        # ----------------------------------------------------
+        # Read uploaded file.
+        # ----------------------------------------------------
+        content = await audio.read()
+
+        if not content:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Empty audio file",
+            )
+
+        if len(content) > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=(
+                    "File too large. Maximum size: "
+                    f"{MAX_FILE_SIZE // (1024 * 1024)} MB"
+                ),
+            )
+
+        # ----------------------------------------------------
+        # Save temporary file.
+        # ----------------------------------------------------
+        tmp_path = create_temp_audio_file(
+            content,
+            suffix,
+        )
+
+        # ----------------------------------------------------
+        # Duration.
+        # ----------------------------------------------------
         duration = get_audio_duration(tmp_path)
-        
-        # Transcribe
+
+        # ----------------------------------------------------
+        # Whisper transcription.
+        # ----------------------------------------------------
         text = await transcribe_audio_async(tmp_path)
-        
-        # Prepare response
+
+        if text is None:
+            text = ""
+
+        text = str(text).strip()
+
         response = {
             "text": text,
             "success": True,
             "language": language,
             "duration_seconds": round(duration, 2),
-            "filename": audio.filename,
+            "filename": filename,
             "file_size_bytes": len(content),
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
         }
-        
-        # Log transcription in background
-        if background_tasks:
+
+        # ----------------------------------------------------
+        # Background logging.
+        # ----------------------------------------------------
+        if background_tasks is not None:
             background_tasks.add_task(
                 log_transcription,
                 text,
                 len(content),
-                duration
+                duration,
             )
-        
+
         return response
-        
-    except Exception as e:
-        logger.error(f"Transcription error: {e}")
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        logger.exception(
+            "Transcription error for '%s': %s",
+            filename,
+            exc,
+        )
+
         return {
             "text": "",
-            "error": str(e),
+            "error": str(exc),
             "success": False,
-            "timestamp": datetime.now().isoformat()
+            "filename": filename,
+            "timestamp": datetime.now().isoformat(),
         }
+
     finally:
-        # Clean up temp file
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+        remove_temp_file(tmp_path)
+
+        try:
+            await audio.close()
+        except Exception:
+            pass
+
+
+# ============================================================
+# BATCH TRANSCRIPTION
+# ============================================================
 
 @router.post("/transcribe/batch")
 async def transcribe_batch(
     audios: List[UploadFile] = File(...),
-    max_parallel: int = 3
+    max_parallel: int = 3,
 ):
-    """Transcribe multiple audio files"""
-    
-    if len(audios) > 10:
+    """
+    Transcribe multiple audio files.
+
+    The endpoint keeps processing sequentially by default for
+    predictable memory usage. max_parallel is retained for
+    frontend/API compatibility.
+    """
+
+    if len(audios) > MAX_BATCH_FILES:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Maximum 10 audio files per batch"
+            detail=(
+                f"Maximum {MAX_BATCH_FILES} audio files "
+                "per batch"
+            ),
         )
-    
+
+    if len(audios) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one audio file is required",
+        )
+
+    # Normalize the requested parallelism even though the
+    # current implementation intentionally processes one file
+    # at a time to avoid excessive memory usage.
+    try:
+        max_parallel = int(max_parallel)
+    except (ValueError, TypeError):
+        max_parallel = 1
+
+    max_parallel = max(
+        1,
+        min(max_parallel, 3),
+    )
+
     results = []
-    
+
     for audio in audios:
-        if not validate_audio_format(audio.filename):
-            results.append({
-                "filename": audio.filename,
-                "error": f"Unsupported format",
-                "success": False
-            })
+        filename = audio.filename or ""
+
+        if not validate_audio_format(filename):
+            results.append(
+                {
+                    "filename": filename,
+                    "error": (
+                        "Unsupported format. Supported: "
+                        f"{', '.join(SUPPORTED_FORMATS)}"
+                    ),
+                    "success": False,
+                }
+            )
             continue
-        
-        content = await audio.read()
-        
-        if len(content) == 0:
-            results.append({
-                "filename": audio.filename,
-                "error": "Empty file",
-                "success": False
-            })
-            continue
-        
-        suffix = os.path.splitext(audio.filename)[1].lower()
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-            tmp.write(content)
-            tmp_path = tmp.name
-        
+
+        content = b""
+
         try:
-            text = await transcribe_audio_async(tmp_path)
-            results.append({
-                "filename": audio.filename,
-                "text": text,
-                "success": True,
-                "file_size_bytes": len(content)
-            })
-        except Exception as e:
-            results.append({
-                "filename": audio.filename,
-                "error": str(e),
-                "success": False
-            })
+            content = await audio.read()
+
+            if not content:
+                results.append(
+                    {
+                        "filename": filename,
+                        "error": "Empty file",
+                        "success": False,
+                    }
+                )
+                continue
+
+            if len(content) > MAX_FILE_SIZE:
+                results.append(
+                    {
+                        "filename": filename,
+                        "error": (
+                            "File too large. Maximum size: "
+                            f"{MAX_FILE_SIZE // (1024 * 1024)} MB"
+                        ),
+                        "success": False,
+                    }
+                )
+                continue
+
+            suffix = get_audio_extension(filename)
+
+            tmp_path = create_temp_audio_file(
+                content,
+                suffix,
+            )
+
+            try:
+                text = await transcribe_audio_async(
+                    tmp_path
+                )
+
+                results.append(
+                    {
+                        "filename": filename,
+                        "text": str(text or "").strip(),
+                        "success": True,
+                        "file_size_bytes": len(content),
+                    }
+                )
+
+            finally:
+                remove_temp_file(tmp_path)
+
+        except Exception as exc:
+            logger.exception(
+                "Batch transcription failed for '%s': %s",
+                filename,
+                exc,
+            )
+
+            results.append(
+                {
+                    "filename": filename,
+                    "error": str(exc),
+                    "success": False,
+                }
+            )
+
         finally:
-            if os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-    
+            try:
+                await audio.close()
+            except Exception:
+                pass
+
     return {
         "success": True,
         "total_files": len(audios),
         "transcriptions": results,
-        "timestamp": datetime.now().isoformat()
+        "timestamp": datetime.now().isoformat(),
     }
+
+
+# ============================================================
+# BASE64 TRANSCRIPTION
+# ============================================================
 
 @router.post("/transcribe/base64")
 async def transcribe_base64(
-    data: dict,
-    background_tasks: BackgroundTasks = None
+    data: Dict[str, Any],
+    background_tasks: BackgroundTasks = None,
 ):
-    """Transcribe base64 encoded audio"""
-    
-    if 'audio' not in data:
+    """
+    Transcribe Base64-encoded audio.
+    """
+
+    if not isinstance(data, dict):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Missing 'audio' field in request body"
+            detail="Request body must be a JSON object",
         )
-    
-    try:
-        audio_bytes = decode_base64_audio(data['audio'])
-    except Exception as e:
+
+    if "audio" not in data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid base64 data: {str(e)}"
+            detail="Missing 'audio' field in request body",
         )
-    
-    # Detect format from data or use default
-    format_type = data.get('format', 'webm')
+
+    audio_bytes = decode_base64_audio(
+        data["audio"]
+    )
+
+    format_type = validate_base64_format(
+        data.get(
+            "format",
+            DEFAULT_BASE64_FORMAT,
+        )
+    )
+
     suffix = f".{format_type}"
-    
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        tmp.write(audio_bytes)
-        tmp_path = tmp.name
-    
+
+    tmp_path: Optional[str] = None
+
     try:
-        text = await transcribe_audio_async(tmp_path)
-        
+        tmp_path = create_temp_audio_file(
+            audio_bytes,
+            suffix,
+        )
+
+        text = await transcribe_audio_async(
+            tmp_path
+        )
+
+        text = str(text or "").strip()
+
+        if background_tasks is not None:
+            background_tasks.add_task(
+                log_transcription,
+                text,
+                len(audio_bytes),
+                get_audio_duration(tmp_path),
+            )
+
         return {
             "text": text,
             "success": True,
             "file_size_bytes": len(audio_bytes),
             "format": format_type,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
         }
-        
-    except Exception as e:
-        logger.error(f"Transcription error: {e}")
+
+    except HTTPException:
+        raise
+
+    except Exception as exc:
+        logger.exception(
+            "Base64 transcription error: %s",
+            exc,
+        )
+
         return {
             "text": "",
-            "error": str(e),
-            "success": False
+            "error": str(exc),
+            "success": False,
+            "format": format_type,
+            "timestamp": datetime.now().isoformat(),
         }
+
     finally:
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
+        remove_temp_file(tmp_path)
+
+
+# ============================================================
+# SUPPORTED FORMATS
+# ============================================================
 
 @router.get("/supported-formats")
 async def get_supported_formats():
-    """Get list of supported audio formats"""
+    """Return supported audio formats and size limit."""
+
     return {
         "formats": SUPPORTED_FORMATS,
         "max_file_size_mb": MAX_FILE_SIZE // (1024 * 1024),
-        "description": "Whisper AI supports multiple audio formats"
+        "description": (
+            "Whisper AI supports multiple audio formats"
+        ),
     }
+
+
+# ============================================================
+# HEALTH CHECK
+# ============================================================
 
 @router.get("/health")
 async def health_check():
-    """Health check for voice service"""
+    """Check the health of the voice service."""
+
     try:
-        test_result = whisper is not None
-        
+        model_loaded = whisper is not None
+
         return {
-            "status": "healthy" if test_result else "degraded",
-            "model_loaded": test_result,
+            "status": (
+                "healthy"
+                if model_loaded
+                else "degraded"
+            ),
+            "model_loaded": model_loaded,
             "supported_formats": SUPPORTED_FORMATS,
-            "timestamp": datetime.now().isoformat()
+            "max_file_size_mb": (
+                MAX_FILE_SIZE // (1024 * 1024)
+            ),
+            "timestamp": datetime.now().isoformat(),
         }
-    except Exception as e:
-        logger.error(f"Health check failed: {e}")
+
+    except Exception as exc:
+        logger.exception(
+            "Voice health check failed: %s",
+            exc,
+        )
+
         return {
             "status": "unhealthy",
-            "error": str(e),
-            "timestamp": datetime.now().isoformat()
+            "model_loaded": False,
+            "error": str(exc),
+            "timestamp": datetime.now().isoformat(),
         }
+
+
+# ============================================================
+# TEST ENDPOINT
+# ============================================================
 
 @router.get("/test")
 async def test_voice():
-    """Test if voice API is working"""
+    """Check whether the voice API is working."""
+
     return {
         "status": "ok",
         "message": "Voice API is working",
         "model_loaded": whisper is not None,
         "supported_formats": SUPPORTED_FORMATS,
-        "timestamp": datetime.now().isoformat()
+        "timestamp": datetime.now().isoformat(),
     }
 
-# ==================== LOGGING FUNCTION ====================
+async def log_transcription(
+    text: str,
+    file_size: int,
+    duration: float,
+):
+    """Log a completed transcription."""
 
-async def log_transcription(text: str, file_size: int, duration: float):
-    """Background task to log transcription events"""
-    logger.info(f"Transcription: '{text[:50]}...' - Size: {file_size} bytes, Duration: {duration}s")
+    logger.info(
+        "Transcription: '%s...' - Size: %s bytes, "
+        "Duration: %.2fs",
+        text[:50],
+        file_size,
+        duration,
+    )

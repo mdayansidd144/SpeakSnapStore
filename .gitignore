@@ -1,16 +1,30 @@
-# Python
-__pycache__/
-*.pyc
+# Environment files
 .env
-venv/
-database/*.db
-models_cache/
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!.env.example
 
 # Node
 node_modules/
 dist/
-.DS_Store
 
-# IDE
-.vscode/
-*.swp
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+venv/
+backend/venv/
+
+# SQLite runtime files
+*.db-wal
+*.db-shm
+
+# Local database files
+database/history.db
+
+# Temporary files
+temp/

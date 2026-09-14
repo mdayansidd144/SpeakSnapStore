@@ -1,705 +1,1281 @@
-import { useRef, useState, useEffect } from 'react'
+import {
+  useEffect,
+  useRef,
+  useState
+} from 'react'
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+const API_BASE =
+  import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
-export default function CameraDetector({ onFeedback, onSuccess }) {
+function CameraDetector({
+  onFeedback,
+  onSuccess
+}) {
+  const [activeMode, setActiveMode] =
+    useState('camera')
+
+  const [cameraActive, setCameraActive] =
+    useState(false)
+
+  const [stream, setStream] =
+    useState(null)
+
+  const [selectedFile, setSelectedFile] =
+    useState(null)
+
+  const [previewUrl, setPreviewUrl] =
+    useState(null)
+
+  const [detecting, setDetecting] =
+    useState(false)
+
+  const [results, setResults] =
+    useState([])
+
+  const [showQuantityModal, setShowQuantityModal] =
+    useState(false)
+
+  const [selectedItem, setSelectedItem] =
+    useState(null)
+
+  const [quantity, setQuantity] =
+    useState(1)
+
   const videoRef = useRef(null)
   const fileInputRef = useRef(null)
-  const [cameraActive, setCameraActive] = useState(false)
-  const [detectedItem, setDetectedItem] = useState(null)
-  const [quantity, setQuantity] = useState('')
-  const [showQuantityInput, setShowQuantityInput] = useState(false)
-  const [isDetecting, setIsDetecting] = useState(false)
-  const [confidence, setConfidence] = useState(0)
-  const [activeMode, setActiveMode] = useState('camera')
-  const [uploadedImage, setUploadedImage] = useState(null)
-  const [imagePreview, setImagePreview] = useState(null)
-  const [uploadedVideo, setUploadedVideo] = useState(null)
-  const [videoPreview, setVideoPreview] = useState(null)
-  const [isProcessing, setIsProcessing] = useState(false)
-  const [detectedObjects, setDetectedObjects] = useState([])
-  const streamRef = useRef(null)
 
   useEffect(() => {
     return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop())
+      if (stream) {
+        stream.getTracks().forEach(
+          (track) => track.stop()
+        )
+      }
+
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl)
       }
     }
-  }, [])
+  }, [stream, previewUrl])
 
-  // Camera functions
+  const handleModeChange = (mode) => {
+    stopCamera()
+
+    setSelectedFile(null)
+    setPreviewUrl(null)
+    setResults([])
+
+    setActiveMode(mode)
+  }
+
   const startCamera = async () => {
-    onFeedback('📸 Requesting camera access...')
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true })
-      streamRef.current = stream
+      const mediaStream =
+        await navigator.mediaDevices.getUserMedia({
+          video: {
+            facingMode: 'environment'
+          },
+          audio: false
+        })
+
+      setStream(mediaStream)
+      setCameraActive(true)
+
       if (videoRef.current) {
-        videoRef.current.srcObject = stream
-        videoRef.current.onloadedmetadata = () => {
-          videoRef.current.play()
-          setCameraActive(true)
-          onFeedback('✅ Camera ready!')
-        }
+        videoRef.current.srcObject =
+          mediaStream
       }
+
+      onFeedback?.(
+        'Camera started'
+      )
     } catch (error) {
-      onFeedback('❌ Camera access denied')
+      console.error(
+        'Camera error:',
+        error
+      )
+
+      onFeedback?.(
+        'Unable to access the camera. Please check browser permissions.'
+      )
     }
   }
 
   const stopCamera = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop())
-      streamRef.current = null
+    if (stream) {
+      stream.getTracks().forEach(
+        (track) => track.stop()
+      )
     }
-    if (videoRef.current) videoRef.current.srcObject = null
+
+    if (videoRef.current) {
+      videoRef.current.srcObject = null
+    }
+
+    setStream(null)
     setCameraActive(false)
-    onFeedback('📸 Camera stopped')
   }
 
-  const captureAndDetect = async () => {
+  const captureFrame = async () => {
     if (!videoRef.current) {
-      onFeedback('❌ Camera not ready')
       return
     }
-    
-    setIsDetecting(true)
-    onFeedback('📸 Capturing...')
-    
-    try {
-      const canvas = document.createElement('canvas')
-      canvas.width = videoRef.current.videoWidth
-      canvas.height = videoRef.current.videoHeight
-      canvas.getContext('2d').drawImage(videoRef.current, 0, 0)
-      
-      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg'))
-      const formData = new FormData()
-      formData.append('image', blob)
-      
-      const response = await fetch(`${API_BASE}/api/vision/detect`, { 
-        method: 'POST', 
-        body: formData 
-      })
-      
-      const data = await response.json()
-      
-      if (data.success && data.detected_item) {
-        setDetectedItem(data.detected_item)
-        setConfidence(data.confidence)
-        setShowQuantityInput(true)
-        onFeedback(`✅ Detected: ${data.detected_item} (${Math.round(data.confidence * 100)}% confidence)`)
-      } else {
-        onFeedback('❌ No object detected. Try again.')
-      }
-    } catch (error) {
-      onFeedback('❌ Detection failed')
-    }
-    setIsDetecting(false)
-  }
 
-  // Image Upload functions
-  const handleImageUpload = (event) => {
-    const file = event.target.files[0]
-    if (file) {
-      const reader = new FileReader()
-      reader.onloadend = () => {
-        setImagePreview(reader.result)
-        setUploadedImage(file)
-        onFeedback(`📁 Image loaded: ${file.name}`)
-      }
-      reader.readAsDataURL(file)
-    }
-  }
+    const video =
+      videoRef.current
 
-  const processUploadedImage = async () => {
-    if (!uploadedImage) {
-      onFeedback('❌ Please select an image first')
+    const canvas =
+      document.createElement('canvas')
+
+    canvas.width =
+      video.videoWidth || 1280
+
+    canvas.height =
+      video.videoHeight || 720
+
+    const context =
+      canvas.getContext('2d')
+
+    if (!context) {
       return
     }
-    
-    setIsProcessing(true)
-    onFeedback('🔍 Analyzing image...')
-    
-    try {
-      const formData = new FormData()
-      formData.append('image', uploadedImage)
-      
-      const response = await fetch(`${API_BASE}/api/vision/detect`, { 
-        method: 'POST', 
-        body: formData 
-      })
-      
-      const data = await response.json()
-      
-      if (data.success && data.detected_item) {
-        setDetectedItem(data.detected_item)
-        setConfidence(data.confidence)
-        setShowQuantityInput(true)
-        onFeedback(`✅ Detected: ${data.detected_item} (${Math.round(data.confidence * 100)}% confidence)`)
-      } else {
-        onFeedback('❌ No object detected in image')
-      }
-    } catch (error) {
-      onFeedback('❌ Detection failed')
-    }
-    setIsProcessing(false)
+
+    context.drawImage(
+      video,
+      0,
+      0,
+      canvas.width,
+      canvas.height
+    )
+
+    canvas.toBlob(
+      async (blob) => {
+        if (!blob) {
+          return
+        }
+
+        const file = new File(
+          [blob],
+          'camera-capture.jpg',
+          {
+            type: 'image/jpeg'
+          }
+        )
+
+        await detectImage(file)
+      },
+      'image/jpeg',
+      0.9
+    )
   }
 
-  // Video Upload functions
-  const handleVideoUpload = (event) => {
-    const file = event.target.files[0]
-    if (file) {
-      const reader = new FileReader()
-      reader.onloadend = () => {
-        setVideoPreview(reader.result)
-        setUploadedVideo(file)
-        onFeedback(`📹 Video loaded: ${file.name}`)
-      }
-      reader.readAsDataURL(file)
-    }
-  }
+  const handleFileChange = (
+    event
+  ) => {
+    const file =
+      event.target.files?.[0]
 
-  const processVideo = async () => {
-    if (!uploadedVideo) {
-      onFeedback('❌ Please select a video first')
+    if (!file) {
       return
     }
-    
-    setIsProcessing(true)
-    onFeedback('🔍 Analyzing video for objects...')
-    
-    try {
-      const formData = new FormData()
-      formData.append('video', uploadedVideo)
-      
-      const response = await fetch(`${API_BASE}/api/vision/detect-video`, { 
-        method: 'POST', 
-        body: formData 
-      })
-      
-      const data = await response.json()
-      
-      if (data.success && data.detections && data.detections.length > 0) {
-        setDetectedObjects(data.detections)
-        onFeedback(`✅ Found ${data.detections.length} objects in video!`)
-      } else {
-        onFeedback('❌ No objects detected in video')
-      }
-    } catch (error) {
-      onFeedback('❌ Video detection failed')
+
+    setSelectedFile(file)
+    setResults([])
+
+    if (previewUrl) {
+      URL.revokeObjectURL(
+        previewUrl
+      )
     }
-    setIsProcessing(false)
+
+    setPreviewUrl(
+      URL.createObjectURL(file)
+    )
   }
 
-  const resetUpload = () => {
-    setUploadedImage(null)
-    setImagePreview(null)
-    setUploadedVideo(null)
-    setVideoPreview(null)
-    setDetectedObjects([])
-    onFeedback('Upload cleared')
-    if (fileInputRef.current) {
-      fileInputRef.current.value = ''
+  const detectImage = async (
+    file
+  ) => {
+    try {
+      setDetecting(true)
+      setResults([])
+
+      const formData =
+        new FormData()
+
+      formData.append(
+        'file',
+        file
+      )
+
+      const response =
+        await fetch(
+          `${API_BASE}/api/vision/detect`,
+          {
+            method: 'POST',
+            body: formData
+          }
+        )
+
+      if (!response.ok) {
+        const errorText =
+          await response.text()
+
+        throw new Error(
+          errorText ||
+            `HTTP ${response.status}`
+        )
+      }
+
+      const data =
+        await response.json()
+
+      const detections =
+        Array.isArray(
+          data?.detections
+        )
+          ? data.detections
+          : Array.isArray(data)
+            ? data
+            : []
+
+      setResults(
+        detections
+      )
+
+      if (detections.length === 0) {
+        onFeedback?.(
+          'No recognizable inventory item was detected'
+        )
+      } else {
+        onFeedback?.(
+          `${detections.length} item${detections.length === 1 ? '' : 's'} detected`
+        )
+      }
+    } catch (error) {
+      console.error(
+        'Image detection error:',
+        error
+      )
+
+      onFeedback?.(
+        error.message ||
+          'Image detection failed'
+      )
+    } finally {
+      setDetecting(false)
     }
+  }
+
+  const detectVideo = async (
+    file
+  ) => {
+    try {
+      setDetecting(true)
+      setResults([])
+
+      const formData =
+        new FormData()
+
+      formData.append(
+        'file',
+        file
+      )
+
+      const response =
+        await fetch(
+          `${API_BASE}/api/vision/detect-video`,
+          {
+            method: 'POST',
+            body: formData
+          }
+        )
+
+      if (!response.ok) {
+        const errorText =
+          await response.text()
+
+        throw new Error(
+          errorText ||
+            `HTTP ${response.status}`
+        )
+      }
+
+      const data =
+        await response.json()
+
+      const detections =
+        Array.isArray(
+          data?.detections
+        )
+          ? data.detections
+          : Array.isArray(data)
+            ? data
+            : []
+
+      setResults(
+        detections
+      )
+
+      if (detections.length === 0) {
+        onFeedback?.(
+          'No recognizable inventory item was detected'
+        )
+      } else {
+        onFeedback?.(
+          `${detections.length} item${detections.length === 1 ? '' : 's'} detected`
+        )
+      }
+    } catch (error) {
+      console.error(
+        'Video detection error:',
+        error
+      )
+
+      onFeedback?.(
+        error.message ||
+          'Video detection failed'
+      )
+    } finally {
+      setDetecting(false)
+    }
+  }
+
+  const handleDetect = async () => {
+    if (!selectedFile) {
+      onFeedback?.(
+        'Please select a file first'
+      )
+      return
+    }
+
+    if (
+      selectedFile.type.startsWith(
+        'video/'
+      )
+    ) {
+      await detectVideo(
+        selectedFile
+      )
+    } else {
+      await detectImage(
+        selectedFile
+      )
+    }
+  }
+
+  const openAddModal = (
+    item
+  ) => {
+    setSelectedItem(item)
+    setQuantity(1)
+    setShowQuantityModal(true)
   }
 
   const addToInventory = async () => {
-    const qty = parseInt(quantity)
-    if (!qty || qty <= 0) {
-      onFeedback('❌ Enter valid quantity')
+    if (!selectedItem) {
       return
     }
-    
-    try {
-      const response = await fetch(`${API_BASE}/api/inventory/add`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: detectedItem.toLowerCase(), quantity: qty })
-      })
-      
-      if (!response.ok) throw new Error('Failed')
-      
-      onFeedback(`✅ Added ${qty} × ${detectedItem}`)
-      setShowQuantityInput(false)
-      setDetectedItem(null)
-      setQuantity('')
-      onSuccess()
-      resetUpload()
-      if (cameraActive) stopCamera()
-    } catch (error) {
-      onFeedback('❌ Failed to add')
-    }
-  }
 
-  const addDetectedObject = async (item) => {
-    const qty = prompt(`How many ${item.item} to add?`, "1")
-    if (!qty) return
-    
-    const quantity = parseInt(qty)
-    if (isNaN(quantity) || quantity <= 0) return
-    
     try {
-      const response = await fetch(`${API_BASE}/api/inventory/add`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: item.item.toLowerCase(), quantity })
-      })
-      
-      if (response.ok) {
-        onFeedback(`✅ Added ${quantity} × ${item.item}`)
-        onSuccess()
+      const name =
+        selectedItem.name ||
+        selectedItem.class_name ||
+        selectedItem.label
+
+      if (!name) {
+        throw new Error(
+          'Detected item does not have a valid name'
+        )
       }
+
+      const response =
+        await fetch(
+          `${API_BASE}/api/inventory/add`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type':
+                'application/json'
+            },
+            body: JSON.stringify({
+              name,
+              quantity:
+                Number(quantity) || 1
+            })
+          }
+        )
+
+      if (!response.ok) {
+        const errorText =
+          await response.text()
+
+        throw new Error(
+          errorText ||
+            `HTTP ${response.status}`
+        )
+      }
+
+      setShowQuantityModal(
+        false
+      )
+
+      setSelectedItem(null)
+
+      onFeedback?.(
+        `${name} added to inventory`
+      )
+
+      await onSuccess?.()
     } catch (error) {
-      onFeedback('❌ Failed to add')
+      console.error(
+        'Add inventory error:',
+        error
+      )
+
+      onFeedback?.(
+        error.message ||
+          'Unable to add item'
+      )
     }
   }
 
   return (
-    <div style={styles.container}>
-      {/* Mode Toggle */}
-      <div style={styles.modeToggle}>
-        <button 
-          className={activeMode === 'camera' ? 'active' : ''} 
-          onClick={() => setActiveMode('camera')}
-          style={styles.modeButton(activeMode === 'camera')}
-        >
-          📸 Camera
-        </button>
-        <button 
-          className={activeMode === 'image' ? 'active' : ''} 
-          onClick={() => setActiveMode('image')}
-          style={styles.modeButton(activeMode === 'image')}
-        >
-          🖼️ Image
-        </button>
-        <button 
-          className={activeMode === 'video' ? 'active' : ''} 
-          onClick={() => setActiveMode('video')}
-          style={styles.modeButton(activeMode === 'video')}
-        >
-          🎥 Video
-        </button>
+    <>
+      <style>{`
+        .camera-page {
+          width: 100%;
+          min-width: 0;
+        }
+
+        .camera-heading {
+          margin-bottom: 22px;
+        }
+
+        .camera-title {
+          margin: 0;
+          color: #123F40;
+          font-size: 28px;
+          line-height: 1.2;
+          font-weight: 800;
+          letter-spacing: -0.7px;
+        }
+
+        .camera-description {
+          margin: 7px 0 0;
+          color: #557879;
+          font-size: 12px;
+          line-height: 1.5;
+        }
+
+        .detector-card {
+          width: 100%;
+          overflow: hidden;
+
+          background: #FFFFFF;
+
+          border: 1px solid #94C9C5;
+          border-radius: 14px;
+
+          box-shadow:
+            0 9px 26px rgba(5, 101, 99, 0.10);
+        }
+
+        .mode-tabs {
+          width: 100%;
+          display: grid;
+          grid-template-columns:
+            repeat(3, 1fr);
+
+          border-bottom: 1px solid #D3E5E3;
+        }
+
+        .mode-tab {
+          min-height: 58px;
+
+          border: none;
+          border-right: 1px solid #D3E5E3;
+
+          background: #FFFFFF;
+          color: #547071;
+
+          font-size: 12px;
+          font-weight: 650;
+
+          cursor: pointer;
+
+          transition:
+            background 0.18s ease,
+            color 0.18s ease;
+        }
+
+        .mode-tab:last-child {
+          border-right: none;
+        }
+
+        .mode-tab:hover {
+          background: #DDF1EF;
+          color: #087F7D;
+        }
+
+        .mode-tab.active {
+          background: #056563;
+          color: #FFFFFF;
+        }
+
+        .mode-tab.active:hover {
+          background: #044F4D;
+          color: #FFFFFF;
+        }
+
+        .detector-content {
+          padding: 28px;
+        }
+
+        .camera-box {
+          width: 100%;
+          min-height: 330px;
+
+          display: flex;
+          align-items: center;
+          justify-content: center;
+
+          padding: 25px;
+
+          border: 1px dashed #9FCBC8;
+          border-radius: 12px;
+
+          background: #F4FBFA;
+
+          text-align: center;
+        }
+
+        .camera-inner {
+          width: min(700px, 100%);
+        }
+
+        .camera-heading-small {
+          margin: 0;
+
+          color: #123F40;
+
+          font-size: 20px;
+          font-weight: 750;
+        }
+
+        .camera-text {
+          margin: 8px 0 20px;
+
+          color: #698183;
+
+          font-size: 12px;
+          line-height: 1.5;
+        }
+
+        .primary-button {
+          min-height: 43px;
+
+          padding: 0 19px;
+
+          border: 1px solid #056563;
+          border-radius: 8px;
+
+          background: #056563;
+          color: #FFFFFF;
+
+          font-size: 11px;
+          font-weight: 750;
+
+          cursor: pointer;
+
+          box-shadow:
+            0 5px 12px rgba(5, 101, 99, 0.16);
+
+          transition:
+            background 0.18s ease,
+            transform 0.18s ease,
+            box-shadow 0.18s ease;
+        }
+
+        .primary-button:hover {
+          background: #044F4D;
+
+          box-shadow:
+            0 7px 15px rgba(5, 101, 99, 0.22);
+        }
+
+        .primary-button:active {
+          transform: translateY(1px);
+        }
+
+        .secondary-button {
+          min-height: 43px;
+
+          padding: 0 18px;
+
+          border: 1px solid #8FCBC7;
+          border-radius: 8px;
+
+          background: #DDF1EF;
+          color: #087F7D;
+
+          font-size: 11px;
+          font-weight: 750;
+
+          cursor: pointer;
+        }
+
+        .camera-video {
+          width: 100%;
+          max-height: 430px;
+
+          border-radius: 10px;
+
+          background: #064E4C;
+
+          object-fit: cover;
+        }
+
+        .button-row {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 9px;
+          flex-wrap: wrap;
+        }
+
+        .file-input {
+          display: none;
+        }
+
+        .preview-image,
+        .preview-video {
+          width: 100%;
+          max-height: 430px;
+
+          border-radius: 10px;
+
+          background: #E2F2F0;
+
+          object-fit: contain;
+        }
+
+        .preview-wrapper {
+          width: 100%;
+          margin-bottom: 18px;
+        }
+
+        .detect-row {
+          display: flex;
+          justify-content: center;
+          gap: 9px;
+          flex-wrap: wrap;
+        }
+
+        .results-section {
+          margin-top: 22px;
+
+          padding: 20px;
+
+          border: 1px solid #A5CECA;
+          border-radius: 12px;
+
+          background: #E1F1EF;
+        }
+
+        .results-title {
+          margin: 0 0 13px;
+
+          color: #123F40;
+
+          font-size: 15px;
+          font-weight: 800;
+        }
+
+        .results-grid {
+          display: grid;
+
+          grid-template-columns:
+            repeat(
+              auto-fit,
+              minmax(190px, 1fr)
+            );
+
+          gap: 10px;
+        }
+
+        .result-card {
+          padding: 14px;
+
+          border: 1px solid #B8D9D6;
+          border-radius: 9px;
+
+          background: #FFFFFF;
+        }
+
+        .result-name {
+          margin: 0;
+
+          color: #173F40;
+
+          font-size: 12px;
+          font-weight: 750;
+        }
+
+        .result-confidence {
+          margin: 5px 0 12px;
+
+          color: #718788;
+
+          font-size: 10px;
+        }
+
+        .result-add {
+          width: 100%;
+          min-height: 35px;
+
+          border: 1px solid #087F7D;
+          border-radius: 7px;
+
+          background: #087F7D;
+          color: #FFFFFF;
+
+          font-size: 10px;
+          font-weight: 700;
+
+          cursor: pointer;
+        }
+
+        .result-add:hover {
+          background: #056563;
+        }
+
+        /* MODAL */
+
+        .modal-overlay {
+          position: fixed;
+          inset: 0;
+
+          z-index: 100;
+
+          display: flex;
+          align-items: center;
+          justify-content: center;
+
+          padding: 20px;
+
+          background:
+            rgba(4, 79, 77, 0.45);
+        }
+
+        .modal {
+          width: min(420px, 100%);
+
+          padding: 24px;
+
+          border-radius: 13px;
+
+          background: #FFFFFF;
+
+          box-shadow:
+            0 20px 55px rgba(4, 79, 77, 0.25);
+        }
+
+        .modal-title {
+          margin: 0;
+
+          color: #123F40;
+
+          font-size: 18px;
+          font-weight: 800;
+        }
+
+        .modal-description {
+          margin: 7px 0 18px;
+
+          color: #6A8182;
+
+          font-size: 11px;
+          line-height: 1.5;
+        }
+
+        .quantity-input {
+          width: 100%;
+          height: 42px;
+
+          padding: 0 12px;
+
+          border: 1px solid #A2CECA;
+          border-radius: 8px;
+
+          outline: none;
+
+          color: #173F40;
+          background: #F8FCFB;
+
+          font-size: 12px;
+        }
+
+        .quantity-input:focus {
+          border-color: #087F7D;
+
+          box-shadow:
+            0 0 0 3px rgba(8, 127, 125, 0.09);
+        }
+
+        .modal-actions {
+          display: flex;
+          justify-content: flex-end;
+
+          gap: 8px;
+
+          margin-top: 18px;
+        }
+
+        @media (max-width: 700px) {
+          .detector-content {
+            padding: 16px;
+          }
+
+          .camera-title {
+            font-size: 24px;
+          }
+
+          .camera-box {
+            min-height: 270px;
+            padding: 18px;
+          }
+
+          .mode-tab {
+            min-height: 52px;
+            font-size: 11px;
+          }
+
+          .results-grid {
+            grid-template-columns: 1fr;
+          }
+        }
+
+        @media (max-width: 430px) {
+          .mode-tab {
+            min-height: 48px;
+            font-size: 10px;
+          }
+
+          .camera-box {
+            min-height: 235px;
+          }
+
+          .button-row,
+          .detect-row {
+            flex-direction: column;
+            width: 100%;
+          }
+
+          .primary-button,
+          .secondary-button {
+            width: 100%;
+          }
+        }
+      `}</style>
+
+      <div className="camera-page">
+        <div className="camera-heading">
+          <h2 className="camera-title">
+            Object Detection
+          </h2>
+
+          <p className="camera-description">
+            Detect inventory items using your
+            camera, an image, or a video.
+          </p>
+        </div>
+
+        <section className="detector-card">
+          <div className="mode-tabs">
+            <button
+              type="button"
+              className={`mode-tab ${
+                activeMode === 'camera'
+                  ? 'active'
+                  : ''
+              }`}
+              onClick={() =>
+                handleModeChange(
+                  'camera'
+                )
+              }
+            >
+              Camera
+            </button>
+
+            <button
+              type="button"
+              className={`mode-tab ${
+                activeMode === 'image'
+                  ? 'active'
+                  : ''
+              }`}
+              onClick={() =>
+                handleModeChange(
+                  'image'
+                )
+              }
+            >
+              Image
+            </button>
+
+            <button
+              type="button"
+              className={`mode-tab ${
+                activeMode === 'video'
+                  ? 'active'
+                  : ''
+              }`}
+              onClick={() =>
+                handleModeChange(
+                  'video'
+                )
+              }
+            >
+              Video
+            </button>
+          </div>
+
+          <div className="detector-content">
+            {activeMode === 'camera' && (
+              <div className="camera-box">
+                <div className="camera-inner">
+                  {cameraActive ? (
+                    <>
+                      <video
+                        ref={videoRef}
+                        className="camera-video"
+                        autoPlay
+                        muted
+                        playsInline
+                      />
+
+                      <div
+                        className="button-row"
+                        style={{
+                          marginTop: '15px'
+                        }}
+                      >
+                        <button
+                          type="button"
+                          className="primary-button"
+                          onClick={
+                            captureFrame
+                          }
+                        >
+                          Detect Item
+                        </button>
+
+                        <button
+                          type="button"
+                          className="secondary-button"
+                          onClick={
+                            stopCamera
+                          }
+                        >
+                          Stop Camera
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <h3 className="camera-heading-small">
+                        Camera Detection
+                      </h3>
+
+                      <p className="camera-text">
+                        Start the camera to
+                        detect an item and
+                        add it to inventory.
+                      </p>
+
+                      <button
+                        type="button"
+                        className="primary-button"
+                        onClick={
+                          startCamera
+                        }
+                      >
+                        Start Camera
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {activeMode === 'image' && (
+              <div className="camera-box">
+                <div className="camera-inner">
+                  {previewUrl ? (
+                    <div className="preview-wrapper">
+                      <img
+                        src={previewUrl}
+                        alt="Selected inventory item"
+                        className="preview-image"
+                      />
+                    </div>
+                  ) : (
+                    <>
+                      <h3 className="camera-heading-small">
+                        Image Detection
+                      </h3>
+
+                      <p className="camera-text">
+                        Select an image to
+                        identify an inventory
+                        item.
+                      </p>
+                    </>
+                  )}
+
+                  <div className="button-row">
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() =>
+                        fileInputRef.current?.click()
+                      }
+                    >
+                      Choose Image
+                    </button>
+
+                    {selectedFile && (
+                      <button
+                        type="button"
+                        className="primary-button"
+                        onClick={
+                          handleDetect
+                        }
+                        disabled={detecting}
+                      >
+                        {detecting
+                          ? 'Detecting...'
+                          : 'Detect Image'}
+                      </button>
+                    )}
+                  </div>
+
+                  <input
+                    ref={fileInputRef}
+                    className="file-input"
+                    type="file"
+                    accept="image/*"
+                    onChange={
+                      handleFileChange
+                    }
+                  />
+                </div>
+              </div>
+            )}
+
+            {activeMode === 'video' && (
+              <div className="camera-box">
+                <div className="camera-inner">
+                  {previewUrl ? (
+                    <div className="preview-wrapper">
+                      <video
+                        src={previewUrl}
+                        className="preview-video"
+                        controls
+                      />
+                    </div>
+                  ) : (
+                    <>
+                      <h3 className="camera-heading-small">
+                        Video Detection
+                      </h3>
+
+                      <p className="camera-text">
+                        Select a video to detect
+                        inventory items.
+                      </p>
+                    </>
+                  )}
+
+                  <div className="button-row">
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() =>
+                        fileInputRef.current?.click()
+                      }
+                    >
+                      Choose Video
+                    </button>
+
+                    {selectedFile && (
+                      <button
+                        type="button"
+                        className="primary-button"
+                        onClick={
+                          handleDetect
+                        }
+                        disabled={detecting}
+                      >
+                        {detecting
+                          ? 'Detecting...'
+                          : 'Detect Video'}
+                      </button>
+                    )}
+                  </div>
+
+                  <input
+                    ref={fileInputRef}
+                    className="file-input"
+                    type="file"
+                    accept="video/*"
+                    onChange={
+                      handleFileChange
+                    }
+                  />
+                </div>
+              </div>
+            )}
+
+            {results.length > 0 && (
+              <div className="results-section">
+                <h3 className="results-title">
+                  Detection Results
+                </h3>
+
+                <div className="results-grid">
+                  {results.map(
+                    (item, index) => {
+                      const name =
+                        item.name ||
+                        item.class_name ||
+                        item.label ||
+                        'Detected item'
+
+                      const confidence =
+                        item.confidence
+
+                      return (
+                        <div
+                          className="result-card"
+                          key={`${name}-${index}`}
+                        >
+                          <p className="result-name">
+                            {name}
+                          </p>
+
+                          {confidence !==
+                            undefined && (
+                            <p className="result-confidence">
+                              Confidence:{' '}
+                              {(
+                                Number(
+                                  confidence
+                                ) * 100
+                              ).toFixed(1)}
+                              %
+                            </p>
+                          )}
+
+                          <button
+                            type="button"
+                            className="result-add"
+                            onClick={() =>
+                              openAddModal(
+                                item
+                              )
+                            }
+                          >
+                            Add to Inventory
+                          </button>
+                        </div>
+                      )
+                    }
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </section>
       </div>
 
-      {/* Camera Mode */}
-      {activeMode === 'camera' && (
-        <>
-          {!cameraActive ? (
-            <div style={styles.placeholder}>
-              <div style={styles.placeholderIcon}>📸</div>
-              <h3 style={styles.placeholderTitle}>Scan Items with Camera</h3>
-              <p style={styles.placeholderText}>Point your camera at any object to detect and add to inventory</p>
-              <button onClick={startCamera} style={styles.startButton}>Start Camera</button>
-            </div>
-          ) : (
-            <div>
-              <div style={styles.videoWrapper}>
-                <video ref={videoRef} autoPlay playsInline style={styles.videoPreview} />
-                <div style={styles.scanFrame}></div>
-                <div style={styles.scanHint}>Center object in frame</div>
-              </div>
-              <div style={styles.buttonGroup}>
-                <button onClick={captureAndDetect} disabled={isDetecting} style={styles.captureButton(isDetecting)}>
-                  {isDetecting ? '⟳ Detecting...' : '📸 Capture & Detect'}
-                </button>
-                <button onClick={stopCamera} style={styles.stopButton}>🛑 Stop Camera</button>
-              </div>
-            </div>
-          )}
-        </>
-      )}
+      {showQuantityModal && (
+        <div
+          className="modal-overlay"
+          onMouseDown={(event) => {
+            if (
+              event.target ===
+              event.currentTarget
+            ) {
+              setShowQuantityModal(
+                false
+              )
+            }
+          }}
+        >
+          <div className="modal">
+            <h3 className="modal-title">
+              Add to Inventory
+            </h3>
 
-      {/* Image Upload Mode */}
-      {activeMode === 'image' && (
-        <div>
-          {!imagePreview ? (
-            <div style={styles.placeholder}>
-              <div style={styles.placeholderIcon}>🖼️</div>
-              <h3 style={styles.placeholderTitle}>Upload an Image</h3>
-              <p style={styles.placeholderText}>Select an image from your device to detect objects</p>
-              <input type="file" accept="image/*" onChange={handleImageUpload} style={{ display: 'none' }} id="image-upload" ref={fileInputRef} />
-              <label htmlFor="image-upload" style={styles.uploadButton}>Choose Image</label>
-            </div>
-          ) : (
-            <div>
-              <img src={imagePreview} alt="Preview" style={styles.previewImage} />
-              <div style={styles.buttonGroup}>
-                <button onClick={processUploadedImage} disabled={isProcessing} style={styles.detectButton(isProcessing)}>
-                  {isProcessing ? '⟳ Processing...' : '🔍 Detect Object'}
-                </button>
-                <button onClick={resetUpload} style={styles.resetButton}>✕ Change Image</button>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+            <p className="modal-description">
+              Set the quantity for{' '}
+              <strong>
+                {selectedItem?.name ||
+                  selectedItem?.class_name ||
+                  selectedItem?.label ||
+                  'this item'}
+              </strong>
+              .
+            </p>
 
-      {/* Video Upload Mode */}
-      {activeMode === 'video' && (
-        <div>
-          {!videoPreview ? (
-            <div style={styles.placeholder}>
-              <div style={styles.placeholderIcon}>🎥</div>
-              <h3 style={styles.placeholderTitle}>Upload a Video</h3>
-              <p style={styles.placeholderText}>Upload a video file to detect objects frame by frame</p>
-              <input type="file" accept="video/*" onChange={handleVideoUpload} style={{ display: 'none' }} id="video-upload" />
-              <label htmlFor="video-upload" style={styles.uploadButton}>Choose Video</label>
-            </div>
-          ) : (
-            <div>
-              <video src={videoPreview} controls style={styles.previewVideo} />
-              <div style={styles.buttonGroup}>
-                <button onClick={processVideo} disabled={isProcessing} style={styles.detectButton(isProcessing)}>
-                  {isProcessing ? '⟳ Processing...' : '🔍 Detect Objects'}
-                </button>
-                <button onClick={resetUpload} style={styles.resetButton}>✕ Change Video</button>
-              </div>
-              {detectedObjects.length > 0 && (
-                <div style={styles.detectedList}>
-                  <h4 style={styles.detectedTitle}>📋 Detected Objects:</h4>
-                  {detectedObjects.map((obj, idx) => (
-                    <div key={idx} style={styles.detectedItem}>
-                      <span>{obj.item} ({Math.round(obj.confidence * 100)}%)</span>
-                      <button onClick={() => addDetectedObject(obj)} style={styles.addDetectedBtn}>➕ Add</button>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Add Quantity Modal */}
-      {showQuantityInput && (
-        <div style={styles.modal}>
-          <div style={styles.modalContent}>
-            <h3 style={styles.modalTitle}>Add to Inventory</h3>
-            <div style={styles.detectedInfo}>
-              <span>Detected:</span>
-              <strong>{detectedItem}</strong>
-              <span style={styles.confidenceBadge}>{Math.round(confidence * 100)}%</span>
-            </div>
-            <input 
-              type="number" 
-              value={quantity} 
-              onChange={(e) => setQuantity(e.target.value)} 
-              placeholder="Enter quantity" 
-              style={styles.modalInput}
-              autoFocus 
+            <input
+              className="quantity-input"
+              type="number"
+              min="1"
+              value={quantity}
+              onChange={(event) =>
+                setQuantity(
+                  Math.max(
+                    1,
+                    Number(
+                      event.target.value
+                    ) || 1
+                  )
+                )
+              }
             />
-            <div style={styles.modalActions}>
-              <button onClick={() => setShowQuantityInput(false)} style={styles.modalCancel}>Cancel</button>
-              <button onClick={addToInventory} style={styles.modalConfirm}>Add to Stock</button>
+
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="secondary-button"
+                onClick={() =>
+                  setShowQuantityModal(
+                    false
+                  )
+                }
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                className="primary-button"
+                onClick={
+                  addToInventory
+                }
+              >
+                Add Item
+              </button>
             </div>
           </div>
         </div>
       )}
-
-      <style>{`
-        @keyframes fadeIn {
-          from { opacity: 0; transform: translateY(10px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-        @keyframes pulse {
-          0% { transform: scale(1); }
-          50% { transform: scale(1.02); }
-          100% { transform: scale(1); }
-        }
-        @keyframes spin {
-          from { transform: rotate(0deg); }
-          to { transform: rotate(360deg); }
-        }
-      `}</style>
-    </div>
+    </>
   )
 }
 
-const styles = {
-  container: {
-    padding: '24px',
-    background: 'linear-gradient(135deg, #ffffff 0%, #fff8f0 100%)',
-    borderRadius: '28px',
-    boxShadow: '0 8px 32px rgba(0, 0, 0, 0.06)',
-    border: '1px solid rgba(255, 152, 0, 0.15)',
-    animation: 'fadeIn 0.3s ease'
-  },
-  modeToggle: {
-    display: 'flex',
-    gap: '12px',
-    marginBottom: '24px',
-    background: 'rgba(255, 255, 255, 0.9)',
-    borderRadius: '60px',
-    padding: '6px',
-    boxShadow: '0 2px 8px rgba(0, 0, 0, 0.03)'
-  },
-  modeButton: (isActive) => ({
-    flex: 1,
-    padding: '12px 20px',
-    borderRadius: '50px',
-    border: 'none',
-    background: isActive ? 'linear-gradient(135deg, #FF9800 0%, #F57C00 100%)' : 'transparent',
-    color: isActive ? 'white' : '#666',
-    cursor: 'pointer',
-    fontWeight: '600',
-    fontSize: '14px',
-    transition: 'all 0.3s ease',
-    boxShadow: isActive ? '0 4px 12px rgba(255, 152, 0, 0.3)' : 'none'
-  }),
-  placeholder: {
-    textAlign: 'center',
-    padding: '48px 24px',
-    background: 'linear-gradient(135deg, #fff8f0 0%, #fff0e0 100%)',
-    borderRadius: '24px',
-    border: '2px dashed #FF9800'
-  },
-  placeholderIcon: {
-    fontSize: '64px',
-    marginBottom: '16px'
-  },
-  placeholderTitle: {
-    fontSize: '1.2rem',
-    fontWeight: '600',
-    color: '#FF9800',
-    marginBottom: '8px'
-  },
-  placeholderText: {
-    fontSize: '13px',
-    color: '#8a8a8e',
-    marginBottom: '24px'
-  },
-  startButton: {
-    padding: '12px 28px',
-    background: 'linear-gradient(135deg, #FF9800 0%, #F57C00 100%)',
-    color: 'white',
-    border: 'none',
-    borderRadius: '40px',
-    cursor: 'pointer',
-    fontWeight: '600',
-    fontSize: '14px',
-    transition: 'all 0.3s ease',
-    boxShadow: '0 4px 12px rgba(255, 152, 0, 0.3)'
-  },
-  uploadButton: {
-    padding: '12px 28px',
-    background: 'linear-gradient(135deg, #FF9800 0%, #F57C00 100%)',
-    color: 'white',
-    border: 'none',
-    borderRadius: '40px',
-    cursor: 'pointer',
-    fontWeight: '600',
-    fontSize: '14px',
-    display: 'inline-block',
-    transition: 'all 0.3s ease'
-  },
-  videoWrapper: {
-    position: 'relative',
-    borderRadius: '20px',
-    overflow: 'hidden',
-    border: '2px solid #FF9800',
-    backgroundColor: '#000',
-    marginBottom: '16px'
-  },
-  videoPreview: {
-    width: '100%',
-    height: 'auto',
-    display: 'block'
-  },
-  scanFrame: {
-    position: 'absolute',
-    top: '50%',
-    left: '50%',
-    transform: 'translate(-50%, -50%)',
-    width: '70%',
-    height: '60%',
-    border: '2px solid rgba(255, 152, 0, 0.8)',
-    borderRadius: '16px',
-    pointerEvents: 'none',
-    animation: 'pulse 2s infinite'
-  },
-  scanHint: {
-    position: 'absolute',
-    bottom: '16px',
-    left: '50%',
-    transform: 'translateX(-50%)',
-    background: 'rgba(0, 0, 0, 0.7)',
-    color: 'white',
-    padding: '6px 16px',
-    borderRadius: '30px',
-    fontSize: '12px',
-    pointerEvents: 'none'
-  },
-  buttonGroup: {
-    display: 'flex',
-    gap: '12px',
-    marginTop: '16px'
-  },
-  captureButton: (disabled) => ({
-    flex: 1,
-    padding: '14px',
-    background: disabled ? '#ccc' : 'linear-gradient(135deg, #FF9800 0%, #F57C00 100%)',
-    color: 'white',
-    border: 'none',
-    borderRadius: '40px',
-    cursor: disabled ? 'not-allowed' : 'pointer',
-    fontWeight: '600',
-    fontSize: '14px',
-    transition: 'all 0.3s ease'
-  }),
-  stopButton: {
-    padding: '14px 24px',
-    background: 'linear-gradient(135deg, #f44336 0%, #d32f2f 100%)',
-    color: 'white',
-    border: 'none',
-    borderRadius: '40px',
-    cursor: 'pointer',
-    fontWeight: '600',
-    fontSize: '14px',
-    transition: 'all 0.3s ease'
-  },
-  detectButton: (disabled) => ({
-    flex: 1,
-    padding: '14px',
-    background: disabled ? '#ccc' : 'linear-gradient(135deg, #FF9800 0%, #F57C00 100%)',
-    color: 'white',
-    border: 'none',
-    borderRadius: '40px',
-    cursor: disabled ? 'not-allowed' : 'pointer',
-    fontWeight: '600',
-    fontSize: '14px'
-  }),
-  resetButton: {
-    padding: '14px 24px',
-    background: 'linear-gradient(135deg, #9C27B0 0%, #7B1FA2 100%)',
-    color: 'white',
-    border: 'none',
-    borderRadius: '40px',
-    cursor: 'pointer',
-    fontWeight: '600',
-    fontSize: '14px'
-  },
-  previewImage: {
-    width: '100%',
-    maxWidth: '500px',
-    borderRadius: '20px',
-    border: '2px solid #FF9800',
-    marginBottom: '16px'
-  },
-  previewVideo: {
-    width: '100%',
-    maxWidth: '500px',
-    borderRadius: '20px',
-    border: '2px solid #FF9800',
-    marginBottom: '16px'
-  },
-  detectedList: {
-    marginTop: '20px',
-    padding: '16px',
-    background: 'white',
-    borderRadius: '20px',
-    border: '1px solid rgba(255, 152, 0, 0.2)'
-  },
-  detectedTitle: {
-    margin: '0 0 12px 0',
-    fontSize: '14px',
-    fontWeight: '600',
-    color: '#FF9800'
-  },
-  detectedItem: {
-    display: 'flex',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: '10px 12px',
-    borderBottom: '1px solid #f0f0f0'
-  },
-  addDetectedBtn: {
-    padding: '4px 12px',
-    background: '#4CAF50',
-    color: 'white',
-    border: 'none',
-    borderRadius: '20px',
-    cursor: 'pointer',
-    fontSize: '12px'
-  },
-  modal: {
-    position: 'fixed',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    background: 'rgba(0, 0, 0, 0.6)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 1000,
-    backdropFilter: 'blur(4px)'
-  },
-  modalContent: {
-    background: 'white',
-    padding: '28px',
-    borderRadius: '28px',
-    width: '340px',
-    maxWidth: '90%',
-    textAlign: 'center',
-    borderTop: '4px solid #FF9800',
-    animation: 'fadeIn 0.3s ease'
-  },
-  modalTitle: {
-    margin: '0 0 16px 0',
-    fontSize: '1.2rem',
-    fontWeight: '600',
-    color: '#333'
-  },
-  detectedInfo: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-    padding: '12px',
-    background: 'rgba(255, 152, 0, 0.1)',
-    borderRadius: '16px',
-    marginBottom: '16px'
-  },
-  confidenceBadge: {
-    marginLeft: 'auto',
-    fontSize: '11px',
-    background: '#FF9800',
-    padding: '2px 10px',
-    borderRadius: '20px',
-    color: 'white'
-  },
-  modalInput: {
-    width: '100%',
-    padding: '14px',
-    fontSize: '16px',
-    border: '1px solid #e0e0e0',
-    borderRadius: '14px',
-    marginBottom: '20px',
-    boxSizing: 'border-box'
-  },
-  modalActions: {
-    display: 'flex',
-    gap: '12px'
-  },
-  modalCancel: {
-    flex: 1,
-    padding: '12px',
-    background: '#f0f0f0',
-    border: 'none',
-    borderRadius: '40px',
-    cursor: 'pointer',
-    fontWeight: '500',
-    transition: 'all 0.2s'
-  },
-  modalConfirm: {
-    flex: 1,
-    padding: '12px',
-    background: 'linear-gradient(135deg, #4CAF50 0%, #2E7D32 100%)',
-    color: 'white',
-    border: 'none',
-    borderRadius: '40px',
-    cursor: 'pointer',
-    fontWeight: '600',
-    transition: 'all 0.2s',
-    boxShadow: '0 2px 8px rgba(76, 175, 80, 0.3)'
-  }
-}
+export default CameraDetector

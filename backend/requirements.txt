@@ -1,5 +1,8 @@
 fastapi
-uvicorn
+uvicorn[standard]
 groq
 python-multipart
 python-dotenv
+numpy
+opencv-python-headless
+ultralytics
