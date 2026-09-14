@@ -286,8 +286,9 @@ app.add_middleware(
 frontend_url = os.getenv(
     "FRONTEND_URL",
     "",
-).strip()
+).strip().rstrip("/")
 
+# Explicit local origins plus the configured production frontend.
 cors_origins = [
     "http://localhost:5173",
     "http://localhost:5174",
@@ -302,14 +303,24 @@ if frontend_url:
             frontend_url
         )
 
+# Vercel creates different deployment URLs for production,
+# previews, and branch deployments. Allow only HTTPS origins
+# ending in vercel.app instead of allowing every website.
+cors_origin_regex = r"https://([a-zA-Z0-9-]+\.)*vercel\.app$"
+
 logger.info(
     "Configured CORS origins: %s",
     cors_origins,
+)
+logger.info(
+    "Configured CORS origin regex: %s",
+    cors_origin_regex,
 )
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
+    allow_origin_regex=cors_origin_regex,
     allow_credentials=True,
     allow_methods=[
         "GET",
